@@ -35,9 +35,9 @@ int main(int argc, char **argv) {
     strcpy(thumbnails->filename, argv[2]);
     WriteImage(image_info, thumbnails, exception);
 
-    thumbnails = DestroyImageList(thumbnails);
-    image_info = DestroyImageInfo(image_info);
-    exception = DestroyExceptionInfo(exception);
+    DestroyImageList(thumbnails);
+    DestroyImageInfo(image_info);
+    DestroyExceptionInfo(exception);
     MagickCoreTerminus();
     return 0;
 }
