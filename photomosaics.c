@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
         exit(1);
 
     thumbnails = NewImageList();
-    while((image=RemoveFirstImageFromList(&images)) != (Image *)NULL) {
+    while((image=RemoveFirstImageFromList(&images))) {
         resize_image = ResizeImage(image, 237, 282, LanczosFilter, exception);
         if(!resize_image)
             MagickError(exception->severity, exception->reason, exception->description);
