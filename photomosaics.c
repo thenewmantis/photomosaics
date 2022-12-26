@@ -6,7 +6,7 @@
 #include <MagickCore/MagickCore.h>
 
 typedef struct {
-    int r, g, b;
+    unsigned int r, g, b;
 } Pixel;
 
 void resize_image(Image *image, ImageInfo *image_info, float resize_factor, char *new_filename, ExceptionInfo *exception) {
@@ -65,7 +65,7 @@ Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t fi
     unsigned char *ps = malloc((image->columns / each_width) * (image->rows / each_height) * 3);
     char *map = "RGB";
     int i = 0;
-    for(size_t y=first_y; y < image->rows; y+=each_height, i+=3) {
+    for(size_t y=first_y; y < image->rows; y+=each_height) {
         for(size_t x=first_x; x < image->columns; x+=each_width, i+=3) {
             Pixel p = get_avg_color(image, x, y, each_width, each_height, exception);
             ps[i] = p.r;
@@ -74,6 +74,7 @@ Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t fi
         }
     }
     Image *new_image = ConstituteImage(image->columns / each_width, image->rows / each_height, map, CharPixel, ps, exception);
+    free(ps);
     if(!new_image)
         exit(1);
     return new_image;
