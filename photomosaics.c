@@ -9,7 +9,7 @@ typedef struct {
     unsigned int r, g, b;
 } Pixel;
 
-void resize_image(Image *image, ImageInfo *image_info, float resize_factor, char *new_filename, ExceptionInfo *exception) {
+static void resize_image(Image *image, ImageInfo *image_info, float resize_factor, char *new_filename, ExceptionInfo *exception) {
     Image *resize_image;
     Image *thumbnails = NewImageList();
     int new_width  = image->columns * resize_factor;
@@ -27,28 +27,23 @@ void resize_image(Image *image, ImageInfo *image_info, float resize_factor, char
     DestroyImageList(thumbnails);
 }
 
-void print_pixel_info(Image *image, int x, int y, ExceptionInfo *exception) {
+static void print_pixel_info(Image *image, int x, int y, ExceptionInfo *exception) {
     unsigned char pixels[3];
-    char *map = "RGB";
-    if(ExportImagePixels(image, x, y, 1, 1, map, CharPixel, pixels, exception))
+    if(ExportImagePixels(image, x, y, 1, 1, "RGB", CharPixel, pixels, exception))
         printf("RGB: %d, %d, %d\n", pixels[0], pixels[1], pixels[2]);
 /*        printf("RGB: 0x%02hhx, 0x%02hhx, 0x%02hhx\n", pixels[0], pixels[1], pixels[2]);*/
 }
 
-Pixel get_avg_color(Image *image, unsigned int x, int y, int width, int height, ExceptionInfo *exception) {
-    unsigned char *pixels = malloc(width * height * 3);
-    char *map = "RGB";
+static Pixel get_avg_color(unsigned char *pixels, const size_t pixels_column_cnt, int x, int y, int width, int height) {
     Pixel p = {0};
-    if(!ExportImagePixels(image, x, y, width, height, map, CharPixel, pixels, exception)) {
-        free(pixels);
-        exit(1);
+    int i = y * pixels_column_cnt + x * 3;
+    for(int c=0; c < width*height;) {
+        p.r += pixels[i++];
+        p.g += pixels[i++];
+        p.b += pixels[i++];
+        if(++c % width == 0)
+            i += (pixels_column_cnt - width) * 3; //next row ...
     }
-    for(int i=0; i < width*height*3; i+=3) {
-        p.r += pixels[i];
-        p.g += pixels[i+1];
-        p.b += pixels[i+2];
-    }
-    free(pixels);
 
     p.r /= width*height;
     p.g /= width*height;
@@ -56,14 +51,19 @@ Pixel get_avg_color(Image *image, unsigned int x, int y, int width, int height, 
     return p;
 }
 
-void print_avg_color(Image *image, unsigned int x, int y, int width, int height, ExceptionInfo *exception) {
-    Pixel p = get_avg_color(image, x, y, width, height, exception);
+static void print_avg_color(Image *image, unsigned int x, int y, int width, int height, ExceptionInfo *exception) {
+    unsigned char *pixels = malloc(width * height * 3);
+    if(!ExportImagePixels(image, x, y, width, height, "RGB", CharPixel, pixels, exception)) {
+        free(pixels);
+        exit(1);
+    }
+    Pixel p = get_avg_color(pixels, width * 3, x, y, width, height);
     printf("RGB: %d, %d, %d\n", p.r, p.g, p.b);
+    free(pixels);
 }
 
-Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t first_y, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
+static Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t first_y, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
     unsigned char *ps = malloc((image->columns / each_width) * (image->rows / each_height) * 3);
-    char *map = "RGB";
     int i = 0;
     for(size_t y=first_y; y < image->rows; y+=each_height) {
         for(size_t x=first_x; x < image->columns; x+=each_width, i+=3) {
@@ -73,8 +73,38 @@ Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t fi
             ps[i+2] = p.b;
         }
     }
-    Image *new_image = ConstituteImage(image->columns / each_width, image->rows / each_height, map, CharPixel, ps, exception);
+    Image *new_image = ConstituteImage(image->columns / each_width, image->rows / each_height, "RGB", CharPixel, ps, exception);
     free(ps);
+    if(!new_image)
+        exit(1);
+    return new_image;
+}
+
+static Image *splotch(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
+    const size_t pixel_cnt = image->columns * image->rows;
+    unsigned char *pixels = malloc(pixel_cnt * 3);
+    if(!ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception)) {
+        free(pixels);
+        exit(1);
+    }
+    for(size_t i=0, j=0; i < pixel_cnt;) {
+        /* Specifying 0 for y allows us to automatically use i to "roll over" into next row*/
+        Pixel p = get_avg_color(pixels, image->columns, i, 0, each_width, each_height);
+        for(size_t c=0; c < each_width*each_height;) {
+            pixels[j++] = p.r;
+            pixels[j++] = p.g;
+            pixels[j++] = p.b;
+            if(++c % each_width == 0)
+                j += (image->columns - each_width) * 3; //next row ...
+        }
+        i += each_width; //next splotch
+        /* If this row is done, skip over all the rows we just splotched */
+        if(i % image->columns == 0)
+            i += image->columns * (each_height - 1);
+        j = i * 3;
+    }
+    Image *new_image = ConstituteImage(image->columns, image->rows, "RGB", CharPixel, pixels, exception);
+    free(pixels);
     if(!new_image)
         exit(1);
     return new_image;
