@@ -1,4 +1,6 @@
+#include <getopt.h>
 #include <locale.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,22 +11,13 @@ typedef struct {
     unsigned int r, g, b;
 } Pixel;
 
-static void resize_image(Image *image, ImageInfo *image_info, float resize_factor, char *new_filename, ExceptionInfo *exception) {
-    Image *resize_image;
-    Image *thumbnails = NewImageList();
+static Image *resize_image(Image *image, float resize_factor, ExceptionInfo *exception) {
     int new_width  = image->columns * resize_factor;
     int new_height = image->rows * resize_factor;
-    resize_image = ResizeImage(image, new_width, new_height, LanczosFilter, exception);
-    printf("%zu x %zu\n", resize_image->columns, resize_image->rows);
-    if(!resize_image)
+    Image *new_image = ResizeImage(image, new_width, new_height, LanczosFilter, exception);
+    if(!new_image)
         MagickError(exception->severity, exception->reason, exception->description);
-    AppendImageToList(&thumbnails, resize_image);
-    DestroyImage(image);
-
-    strcpy(thumbnails->filename, new_filename);
-    WriteImage(image_info, thumbnails, exception);
-
-    DestroyImageList(thumbnails);
+    return new_image;
 }
 
 static void print_pixel_info(Image *image, int x, int y, ExceptionInfo *exception) {
@@ -80,7 +73,7 @@ static void print_avg_color(Image *image, unsigned int x, int y, int width, int 
 /*    return new_image;*/
 /*}*/
 
-static Image *splotch(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
+static Image *splotch_img(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
     const size_t pixel_cnt = image->columns * image->rows;
     unsigned char *pixels = malloc(pixel_cnt * 3);
     if(!ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception)) {
@@ -106,57 +99,124 @@ static Image *splotch(Image *image, const size_t each_width, const size_t each_h
     Image *new_image = ConstituteImage(image->columns, image->rows, "RGB", CharPixel, pixels, exception);
     free(pixels);
     if(!new_image)
-        exit(1);
+        MagickError(exception->severity, exception->reason, exception->description);
     return new_image;
+}
+
+int usage() {
+    return 0;
 }
 
 int main(int argc, char **argv) {
     ExceptionInfo *exception;
-    Image *images, *image;
-    ImageInfo *image_info;
-/*    float resize_factor = 0.0;*/
-/*    char *endptr;*/
-/*    if(argc == 4) {*/
-/*        const char *old_locale = setlocale(LC_ALL, NULL);*/
-/*        setlocale(LC_ALL|~LC_NUMERIC, "");*/
-/*        resize_factor = strtof(argv[3], &endptr);*/
-/*        setlocale(LC_ALL, old_locale);*/
-/*    }*/
-/*    if(argc < 4 || !strncmp(argv[3], endptr, strlen(argv[3])) || resize_factor < 0.0) {*/
-/*        fprintf(stderr, "Usage: %s old_image new_image resize_factor\n", argv[0]);*/
-/*        exit(2);*/
-/*    }*/
-/*    if(resize_factor > 10.0) {*/
-/*        fprintf(stderr, "resize_factor %.1f is too big. Please don't break my computer.\n", resize_factor);*/
-/*        exit(1);*/
-/*    }*/
+    Image *input_img, *output_img = NULL;
+    char input_img_filename[400];
+    input_img_filename[0] = 0;
+    char output_img_filename[400];
+    output_img_filename[0] = 0;
+    ImageInfo *image_info, *new_image_info = NULL;
+    float resize_factor = 0.0;
+    char *endptr;
+    bool get_pixel_info = false;
+    bool resize = false;
+    bool splotch = false;
+
+    int opt;
+    while((opt=getopt(argc, argv, "hi:no:r:s")) > -1) {
+        switch(opt) {
+        case 'h':
+            return usage();
+            break;
+        case 'i':
+            strcpy(input_img_filename, optarg);
+            break;
+        case 'n':
+            if(splotch || resize) {
+                fprintf(stderr, "Please specify exactly one of: -r, -n, -s\n");
+                return 2;
+            }
+            get_pixel_info = true;
+            break;
+        case 'o':
+            strcpy(output_img_filename, optarg);
+            break;
+        case 'r':
+            if(get_pixel_info || splotch) {
+                fprintf(stderr, "Please specify exactly one of: -r, -n, -s\n");
+                return 2;
+            }
+            {
+                const char *old_locale = setlocale(LC_ALL, NULL);
+                setlocale(LC_ALL|~LC_NUMERIC, "");
+                resize_factor = strtof(optarg, &endptr);
+                setlocale(LC_ALL, old_locale);
+            }
+            if(!strncmp(optarg, endptr, strlen(optarg))) {
+                fprintf(stderr, "FATAL: Argument \"%s\" to option -r could not be parsed to a float.\n", optarg);
+                return 2;
+            }
+            // TODO implement a more robust maximum
+            if(resize_factor < 0.01 || resize_factor > 10.0) {
+                fprintf(stderr, "resize_factor %.1f is out of bounds. Should be greater than 0 and no more than 10.\n", resize_factor);
+                return 2;
+            }
+            resize = true;
+            break;
+        case 's':
+            if(get_pixel_info || resize) {
+                fprintf(stderr, "Please specify exactly one of: -r, -n, -s\n");
+                return 2;
+            }
+            splotch = true;
+            break;
+        }
+    }
+
+    if(strnlen(input_img_filename, 400) < 1) {
+        fprintf(stderr, "FATAL: no input image specified.\n");
+        return 2;
+    }
+    if((resize || splotch) && strnlen(output_img_filename, 400) < 1) {
+        fprintf(stderr, "FATAL: no output image specified.\n");
+        return 2;
+    }
 
     MagickCoreGenesis(*argv, MagickTrue);
     exception = AcquireExceptionInfo();
     image_info = CloneImageInfo((ImageInfo *)NULL);
-    strcpy(image_info->filename, argv[1]);
-    images = ReadImage(image_info, exception);
+    strcpy(image_info->filename, input_img_filename);
+    Image *images = ReadImage(image_info, exception);
     if(exception->severity != UndefinedException)
         CatchException(exception);
     if(!images)
-        exit(1);
-    image=RemoveFirstImageFromList(&images);
-    if(!image)
-        exit(1);
-/*    resize_image(image, image_info, resize_factor, argv[2], exception);*/
-/*    for(unsigned int i=0; i < image->columns; i++)*/
-/*        print_pixel_info(image, i, 0, exception);*/
-/*    for(unsigned int i=0; i < image->columns; i++)*/
-/*        print_avg_color(image, i, 0, 1, 1, exception);*/
-    Image *new_image = make_img_avg_colors(image, 0, 0, 100, 100, exception);
-    ImageInfo *new_image_info = CloneImageInfo((ImageInfo *)NULL);
-    strcpy(new_image->filename, argv[2]);
-    WriteImage(new_image_info, new_image, exception);
+        return 1;
+    input_img = RemoveFirstImageFromList(&images);
+    if(!input_img)
+        return 1;
 
-    DestroyImage(image);
-    DestroyImage(new_image);
+    if(resize) {
+        output_img = resize_image(input_img, resize_factor, exception);
+    }
+/*    else if(get_pixel_info) {*/
+/*    for(unsigned int i=0; i < input_img->columns; i++)*/
+/*        print_pixel_info(input_img, i, 0, exception);*/
+/*    }*/
+/*    for(unsigned int i=0; i < input_img->columns; i+=100)*/
+/*        print_avg_color(input_img, i, 0, 100, 100, exception);*/
+/*    Image *output_img = make_img_avg_colors(input_img, 0, 0, 6, 5, exception);*/
+    else if(splotch) {
+        output_img = splotch_img(input_img, 60, 61, exception);
+    }
+
+    DestroyImage(input_img);
     DestroyImageInfo(image_info);
-    DestroyImageInfo(new_image_info);
+    if(output_img) {
+        new_image_info = CloneImageInfo((ImageInfo *)NULL);
+        strcpy(output_img->filename, output_img_filename);
+        WriteImage(new_image_info, output_img, exception);
+        DestroyImage(output_img);
+        DestroyImageInfo(new_image_info);
+    }
     DestroyExceptionInfo(exception);
     MagickCoreTerminus();
     return 0;
