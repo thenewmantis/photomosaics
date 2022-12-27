@@ -118,7 +118,8 @@ int main(int argc, char **argv) {
     output_img_filename[0] = 0;
     ImageInfo *image_info, *new_image_info = NULL;
     float resize_factor = 0.0;
-    char *endptr;
+    char endptr[400];
+    endptr[0] = 0;
     bool get_pixel_info = false;
     bool resize = false;
     bool splotch = false;
