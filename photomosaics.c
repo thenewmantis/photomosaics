@@ -22,7 +22,7 @@ static Image *resize_image(Image *image, float resize_factor, ExceptionInfo *exc
     return new_image;
 }
 
-static void print_pixel_info(Image *image, int x, int y, ExceptionInfo *exception) {
+static void print_pixel_info(Image *image, const ssize_t x, const ssize_t y, ExceptionInfo *exception) {
     unsigned char pixels[3];
     if(ExportImagePixels(image, x, y, 1, 1, "RGB", CharPixel, pixels, exception))
         printf("RGB: %d, %d, %d\n", pixels[0], pixels[1], pixels[2]);
@@ -45,35 +45,39 @@ static Pixel get_avg_color(unsigned char *pixels, const size_t pixels_column_cnt
     p.b /= width*height;
     return p;
 }
-
-static void print_avg_color(Image *image, unsigned int x, int y, int width, int height, ExceptionInfo *exception) {
+static Pixel get_img_avg_color(Image *image, int x, int y, int width, int height, ExceptionInfo *exception) {
     unsigned char *pixels = malloc(width * height * 3);
     if(!ExportImagePixels(image, x, y, width, height, "RGB", CharPixel, pixels, exception)) {
         free(pixels);
         exit(1);
     }
-    Pixel p = get_avg_color(pixels, width * 3, x, y, width, height);
-    printf("RGB: %d, %d, %d\n", p.r, p.g, p.b);
+    Pixel p = get_avg_color(pixels, width, x, y, width, height);
     free(pixels);
+    return p;
 }
 
-/*static Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t first_y, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {*/
-/*    unsigned char *ps = malloc((image->columns / each_width) * (image->rows / each_height) * 3);*/
-/*    int i = 0;*/
-/*    for(size_t y=first_y; y < image->rows; y+=each_height) {*/
-/*        for(size_t x=first_x; x < image->columns; x+=each_width, i+=3) {*/
-/*            Pixel p = get_avg_color(image, x, y, each_width, each_height, exception);*/
-/*            ps[i] = p.r;*/
-/*            ps[i+1] = p.g;*/
-/*            ps[i+2] = p.b;*/
-/*        }*/
-/*    }*/
-/*    Image *new_image = ConstituteImage(image->columns / each_width, image->rows / each_height, "RGB", CharPixel, ps, exception);*/
-/*    free(ps);*/
-/*    if(!new_image)*/
-/*        exit(1);*/
-/*    return new_image;*/
-/*}*/
+static void print_avg_color(Image *image, unsigned int x, int y, int width, int height, ExceptionInfo *exception) {
+    Pixel p = get_img_avg_color(image, x, y, width, height, exception);
+    printf("RGB: %d, %d, %d\n", p.r, p.g, p.b);
+}
+
+static Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t first_y, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
+    unsigned char *ps = malloc((image->columns / each_width) * (image->rows / each_height) * 3);
+    int i = 0;
+    for(size_t y=first_y; y < image->rows; y+=each_height) {
+        for(size_t x=first_x; x < image->columns; x+=each_width, i+=3) {
+            Pixel p = get_img_avg_color(image, x, y, each_width, each_height, exception);
+            ps[i] = p.r;
+            ps[i+1] = p.g;
+            ps[i+2] = p.b;
+        }
+    }
+    Image *new_image = ConstituteImage(image->columns / each_width, image->rows / each_height, "RGB", CharPixel, ps, exception);
+    free(ps);
+    if(!new_image)
+        exit(1);
+    return new_image;
+}
 
 static Image *splotch_img(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
     const size_t pixel_cnt = image->columns * image->rows;
@@ -118,15 +122,23 @@ int main(int argc, char **argv) {
     output_img_filename[0] = 0;
     ImageInfo *image_info, *new_image_info = NULL;
     float resize_factor = 0.0;
-    char endptr[400];
-    endptr[0] = 0;
-    bool get_pixel_info = false;
+    char *endptr;
+    bool prn_avg_color = false;
+    bool dumb_shrink = false;
+    bool prn_pixel_info = false;
     bool resize = false;
     bool splotch = false;
+    ssize_t x = 0, y = 0;
 
     int opt;
-    while((opt=getopt(argc, argv, "hi:no:r:s")) > -1) {
+    while((opt=getopt(argc, argv, "ahi:no:r:sx:y:")) > -1) {
         switch(opt) {
+        case 'a':
+            prn_avg_color = true;
+            break;
+        case 'd':
+            dumb_shrink = true;
+            break;
         case 'h':
             return usage();
             break;
@@ -134,7 +146,7 @@ int main(int argc, char **argv) {
             strcpy(input_img_filename, optarg);
             break;
         case 'n':
-            get_pixel_info = true;
+            prn_pixel_info = true;
             break;
         case 'o':
             strcpy(output_img_filename, optarg);
@@ -156,43 +168,61 @@ int main(int argc, char **argv) {
         case 's':
             splotch = true;
             break;
+        case 'x':
+            {
+                const char *old_locale = setlocale(LC_ALL, NULL);
+                setlocale(LC_ALL|~LC_NUMERIC, "");
+                x = strtoul(optarg, &endptr, 10);
+                setlocale(LC_ALL, old_locale);
+            }
+            if(!strncmp(optarg, endptr, strlen(optarg)))
+                DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to an unsigned long.\n", optarg);
+            break;
+        case 'y':
+            {
+                const char *old_locale = setlocale(LC_ALL, NULL);
+                setlocale(LC_ALL|~LC_NUMERIC, "");
+                y = strtoul(optarg, &endptr, 10);
+                setlocale(LC_ALL, old_locale);
+            }
+            if(!strncmp(optarg, endptr, strlen(optarg)))
+                DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to an unsigned long.\n", optarg);
+            break;
         }
     }
 
-    if(!(get_pixel_info ^ splotch ^ resize))
-        DIE(2, "FATAL: must specify exactly one of: -r, -n, -s\n");
+    if(!(prn_avg_color ^ dumb_shrink ^ prn_pixel_info  ^ resize ^ splotch))
+        DIE(2, "FATAL: must specify exactly one of: -a, -d, -n, -r, -s\n");
     if(strnlen(input_img_filename, 400) < 1)
         DIE(2, "FATAL: no input image specified.\n");
     if((resize || splotch) && strnlen(output_img_filename, 400) < 1)
-        DIE(2, "FATAL: no output image specified.\n");
+        DIE(2, "FATAL: Must specify output image to resize or splotch.\n");
+    if((prn_pixel_info || prn_avg_color))
+        fprintf(stderr, "point: %zu, %zu\n", x, y);
 
     MagickCoreGenesis(*argv, MagickTrue);
     exception = AcquireExceptionInfo();
     image_info = CloneImageInfo((ImageInfo *)NULL);
     strcpy(image_info->filename, input_img_filename);
-    Image *images = ReadImage(image_info, exception);
+    input_img = ReadImage(image_info, exception);
     if(exception->severity != UndefinedException)
         CatchException(exception);
-    if(!images)
-        return 1;
-    input_img = RemoveFirstImageFromList(&images);
     if(!input_img)
         return 1;
 
-    if(resize) {
+    if(resize)
         output_img = resize_image(input_img, resize_factor, exception);
-    }
-/*    else if(get_pixel_info) {*/
-/*    for(unsigned int i=0; i < input_img->columns; i++)*/
-/*        print_pixel_info(input_img, i, 0, exception);*/
-/*    }*/
-/*    for(unsigned int i=0; i < input_img->columns; i+=100)*/
-/*        print_avg_color(input_img, i, 0, 100, 100, exception);*/
-/*    Image *output_img = make_img_avg_colors(input_img, 0, 0, 6, 5, exception);*/
-    else if(splotch) {
-        output_img = splotch_img(input_img, 60, 61, exception);
-    }
+    else if(prn_pixel_info)
+        print_pixel_info(input_img, x, y, exception);
+    else if(prn_avg_color)
+        print_avg_color(input_img, x, y, 100, 100, exception);
+    else if(dumb_shrink)
+        output_img = make_img_avg_colors(input_img, 0, 0, 6, 5, exception);
+    else if(splotch)
+        output_img = splotch_img(input_img, 100, 100, exception);
 
+    if(exception->severity != UndefinedException)
+        CatchException(exception);
     DestroyImage(input_img);
     DestroyImageInfo(image_info);
     if(output_img) {
