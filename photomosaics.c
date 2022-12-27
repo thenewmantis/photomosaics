@@ -29,10 +29,10 @@ static void print_pixel_info(Image *image, const ssize_t x, const ssize_t y, Exc
 /*        printf("RGB: 0x%02hhx, 0x%02hhx, 0x%02hhx\n", pixels[0], pixels[1], pixels[2]);*/
 }
 
-static Pixel get_avg_color(unsigned char *pixels, const size_t pixels_column_cnt, int x, int y, int width, int height) {
+static Pixel get_avg_color(unsigned char *pixels, const size_t pixels_column_cnt, const ssize_t x, const ssize_t y, const size_t width, const size_t height) {
     Pixel p = {0};
     int i = y * pixels_column_cnt + x * 3;
-    for(int c=0; c < width*height;) {
+    for(unsigned long c=0; c < width*height;) {
         p.r += pixels[i++];
         p.g += pixels[i++];
         p.b += pixels[i++];
@@ -45,7 +45,7 @@ static Pixel get_avg_color(unsigned char *pixels, const size_t pixels_column_cnt
     p.b /= width*height;
     return p;
 }
-static Pixel get_img_avg_color(Image *image, int x, int y, int width, int height, ExceptionInfo *exception) {
+static Pixel get_img_avg_color(Image *image, const ssize_t x, const ssize_t y, const size_t width, const size_t height, ExceptionInfo *exception) {
     unsigned char *pixels = malloc(width * height * 3);
     if(!ExportImagePixels(image, x, y, width, height, "RGB", CharPixel, pixels, exception)) {
         free(pixels);
@@ -56,7 +56,7 @@ static Pixel get_img_avg_color(Image *image, int x, int y, int width, int height
     return p;
 }
 
-static void print_avg_color(Image *image, unsigned int x, int y, int width, int height, ExceptionInfo *exception) {
+static void print_avg_color(Image *image, unsigned int x, unsigned int y, const size_t width, const size_t height, ExceptionInfo *exception) {
     Pixel p = get_img_avg_color(image, x, y, width, height, exception);
     printf("RGB: %d, %d, %d\n", p.r, p.g, p.b);
 }
@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
     ssize_t x = 0, y = 0;
 
     int opt;
-    while((opt=getopt(argc, argv, "ahi:no:r:sx:y:")) > -1) {
+    while((opt=getopt(argc, argv, "ahi:l:no:r:sx:y:")) > -1) {
         switch(opt) {
         case 'a':
             prn_avg_color = true;
