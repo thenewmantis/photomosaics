@@ -62,23 +62,23 @@ static void print_avg_color(Image *image, unsigned int x, int y, int width, int 
     free(pixels);
 }
 
-static Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t first_y, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
-    unsigned char *ps = malloc((image->columns / each_width) * (image->rows / each_height) * 3);
-    int i = 0;
-    for(size_t y=first_y; y < image->rows; y+=each_height) {
-        for(size_t x=first_x; x < image->columns; x+=each_width, i+=3) {
-            Pixel p = get_avg_color(image, x, y, each_width, each_height, exception);
-            ps[i] = p.r;
-            ps[i+1] = p.g;
-            ps[i+2] = p.b;
-        }
-    }
-    Image *new_image = ConstituteImage(image->columns / each_width, image->rows / each_height, "RGB", CharPixel, ps, exception);
-    free(ps);
-    if(!new_image)
-        exit(1);
-    return new_image;
-}
+/*static Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t first_y, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {*/
+/*    unsigned char *ps = malloc((image->columns / each_width) * (image->rows / each_height) * 3);*/
+/*    int i = 0;*/
+/*    for(size_t y=first_y; y < image->rows; y+=each_height) {*/
+/*        for(size_t x=first_x; x < image->columns; x+=each_width, i+=3) {*/
+/*            Pixel p = get_avg_color(image, x, y, each_width, each_height, exception);*/
+/*            ps[i] = p.r;*/
+/*            ps[i+1] = p.g;*/
+/*            ps[i+2] = p.b;*/
+/*        }*/
+/*    }*/
+/*    Image *new_image = ConstituteImage(image->columns / each_width, image->rows / each_height, "RGB", CharPixel, ps, exception);*/
+/*    free(ps);*/
+/*    if(!new_image)*/
+/*        exit(1);*/
+/*    return new_image;*/
+/*}*/
 
 static Image *splotch(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
     const size_t pixel_cnt = image->columns * image->rows;
