@@ -7,6 +7,8 @@
 #include <time.h>
 #include <MagickCore/MagickCore.h>
 
+#define DIE(rc, ...)    { fprintf(stderr, __VA_ARGS__); return rc; }
+
 typedef struct {
     unsigned int r, g, b;
 } Pixel;
@@ -131,55 +133,37 @@ int main(int argc, char **argv) {
             strcpy(input_img_filename, optarg);
             break;
         case 'n':
-            if(splotch || resize) {
-                fprintf(stderr, "Please specify exactly one of: -r, -n, -s\n");
-                return 2;
-            }
             get_pixel_info = true;
             break;
         case 'o':
             strcpy(output_img_filename, optarg);
             break;
         case 'r':
-            if(get_pixel_info || splotch) {
-                fprintf(stderr, "Please specify exactly one of: -r, -n, -s\n");
-                return 2;
-            }
             {
                 const char *old_locale = setlocale(LC_ALL, NULL);
                 setlocale(LC_ALL|~LC_NUMERIC, "");
                 resize_factor = strtof(optarg, &endptr);
                 setlocale(LC_ALL, old_locale);
             }
-            if(!strncmp(optarg, endptr, strlen(optarg))) {
-                fprintf(stderr, "FATAL: Argument \"%s\" to option -r could not be parsed to a float.\n", optarg);
-                return 2;
-            }
+            if(!strncmp(optarg, endptr, strlen(optarg)))
+                DIE(2, "FATAL: Argument \"%s\" to option -r could not be parsed to a float.\n", optarg);
             // TODO implement a more robust maximum
-            if(resize_factor < 0.01 || resize_factor > 10.0) {
-                fprintf(stderr, "resize_factor %.1f is out of bounds. Should be greater than 0 and no more than 10.\n", resize_factor);
-                return 2;
-            }
+            if(resize_factor < 0.01 || resize_factor > 10.0)
+                DIE(2, "resize_factor %.1f is out of bounds. Should be greater than 0 and no more than 10.\n", resize_factor);
             resize = true;
             break;
         case 's':
-            if(get_pixel_info || resize) {
-                fprintf(stderr, "Please specify exactly one of: -r, -n, -s\n");
-                return 2;
-            }
             splotch = true;
             break;
         }
     }
 
-    if(strnlen(input_img_filename, 400) < 1) {
-        fprintf(stderr, "FATAL: no input image specified.\n");
-        return 2;
-    }
-    if((resize || splotch) && strnlen(output_img_filename, 400) < 1) {
-        fprintf(stderr, "FATAL: no output image specified.\n");
-        return 2;
-    }
+    if(!(get_pixel_info ^ splotch ^ resize))
+        DIE(2, "FATAL: must specify exactly one of: -r, -n, -s\n");
+    if(strnlen(input_img_filename, 400) < 1)
+        DIE(2, "FATAL: no input image specified.\n");
+    if((resize || splotch) && strnlen(output_img_filename, 400) < 1)
+        DIE(2, "FATAL: no output image specified.\n");
 
     MagickCoreGenesis(*argv, MagickTrue);
     exception = AcquireExceptionInfo();
