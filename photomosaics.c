@@ -13,6 +13,31 @@ typedef struct {
     unsigned int r, g, b;
 } Pixel;
 
+static bool parse_float(char *str, float *out) {
+    char *endptr;
+    const char *old_locale = setlocale(LC_ALL, NULL);
+    setlocale(LC_ALL|~LC_NUMERIC, "");
+    *out = strtof(str, &endptr);
+    setlocale(LC_ALL, old_locale);
+    return strncmp(str, endptr, strlen(str));
+}
+static bool parse_l(char *str, long *out) {
+    char *endptr;
+    const char *old_locale = setlocale(LC_ALL, NULL);
+    setlocale(LC_ALL|~LC_NUMERIC, "");
+    *out = strtol(str, &endptr, 10);
+    setlocale(LC_ALL, old_locale);
+    return strncmp(str, endptr, strlen(str));
+}
+static bool parse_ll(char *str, long long *out) {
+    char *endptr;
+    const char *old_locale = setlocale(LC_ALL, NULL);
+    setlocale(LC_ALL|~LC_NUMERIC, "");
+    *out = strtoll(str, &endptr, 10);
+    setlocale(LC_ALL, old_locale);
+    return strncmp(str, endptr, strlen(str));
+}
+
 static Image *resize_image(Image *image, float resize_factor, ExceptionInfo *exception) {
     int new_width  = image->columns * resize_factor;
     int new_height = image->rows * resize_factor;
@@ -122,7 +147,6 @@ int main(int argc, char **argv) {
     output_img_filename[0] = 0;
     ImageInfo *image_info, *new_image_info = NULL;
     float resize_factor = 0.0;
-    char *endptr;
     bool prn_avg_color = false;
     bool dumb_shrink = false;
     bool prn_pixel_info = false;
@@ -152,13 +176,7 @@ int main(int argc, char **argv) {
             strcpy(output_img_filename, optarg);
             break;
         case 'r':
-            {
-                const char *old_locale = setlocale(LC_ALL, NULL);
-                setlocale(LC_ALL|~LC_NUMERIC, "");
-                resize_factor = strtof(optarg, &endptr);
-                setlocale(LC_ALL, old_locale);
-            }
-            if(!strncmp(optarg, endptr, strlen(optarg)))
+            if(!parse_float(optarg, &resize_factor))
                 DIE(2, "FATAL: Argument \"%s\" to option -r could not be parsed to a float.\n", optarg);
             // TODO implement a more robust maximum
             if(resize_factor < 0.01 || resize_factor > 10.0)
@@ -169,24 +187,12 @@ int main(int argc, char **argv) {
             splotch = true;
             break;
         case 'x':
-            {
-                const char *old_locale = setlocale(LC_ALL, NULL);
-                setlocale(LC_ALL|~LC_NUMERIC, "");
-                x = strtoul(optarg, &endptr, 10);
-                setlocale(LC_ALL, old_locale);
-            }
-            if(!strncmp(optarg, endptr, strlen(optarg)))
-                DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to an unsigned long.\n", optarg);
+            if(!parse_l(optarg, &x))
+                DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to a long int.\n", optarg);
             break;
         case 'y':
-            {
-                const char *old_locale = setlocale(LC_ALL, NULL);
-                setlocale(LC_ALL|~LC_NUMERIC, "");
-                y = strtoul(optarg, &endptr, 10);
-                setlocale(LC_ALL, old_locale);
-            }
-            if(!strncmp(optarg, endptr, strlen(optarg)))
-                DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to an unsigned long.\n", optarg);
+            if(!parse_l(optarg, &y))
+                DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to a long int.\n", optarg);
             break;
         }
     }
