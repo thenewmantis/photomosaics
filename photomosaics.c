@@ -38,13 +38,16 @@ static bool parse_ulong(char *str, unsigned long *out) {
     return strncmp(str, endptr, strlen(str));
 }
 
-static Image *resize_image(Image *image, float resize_factor, ExceptionInfo *exception) {
-    int new_width  = image->columns * resize_factor;
-    int new_height = image->rows * resize_factor;
+
+static Image *resize_image_to(Image *image, const size_t new_width, const size_t new_height, ExceptionInfo  *exception) {
     Image *new_image = ResizeImage(image, new_width, new_height, LanczosFilter, exception);
     if(!new_image)
         MagickError(exception->severity, exception->reason, exception->description);
     return new_image;
+}
+
+static Image *resize_image_by_factor(Image *image, float resize_factor, ExceptionInfo *exception) {
+    return resize_image_to(image, image->columns * resize_factor, image->rows * resize_factor, exception);
 }
 
 static void print_pixel_info(Image *image, const ssize_t x, const ssize_t y, ExceptionInfo *exception) {
@@ -156,7 +159,7 @@ int main(int argc, char **argv) {
     size_t length = 1, width = 1;
 
     int opt;
-    while((opt=getopt(argc, argv, "adhi:l:no:r:sw:x:y:")) > -1) {
+    while((opt=getopt(argc, argv, "adhi:l:no:Rr:sw:x:y:")) > -1) {
         switch(opt) {
         case 'a':
             prn_avg_color = true;
@@ -179,6 +182,9 @@ int main(int argc, char **argv) {
             break;
         case 'o':
             strcpy(output_img_filename, optarg);
+            break;
+        case 'R':
+            resize=true;
             break;
         case 'r':
             if(!parse_float(optarg, &resize_factor))
@@ -214,7 +220,7 @@ int main(int argc, char **argv) {
         DIE(2, "FATAL: Must specify output image to resize or splotch.\n");
     if(prn_pixel_info || prn_avg_color)
         fprintf(stderr, "point: %zu, %zu\n", x, y);
-    if(prn_avg_color || dumb_shrink || splotch)
+    if(prn_avg_color || dumb_shrink || splotch || (resize && resize_factor < 0.01))
         fprintf(stderr, "dimensions: %zu x %zu\n", width, length);
 
     MagickCoreGenesis(*argv, MagickTrue);
@@ -227,8 +233,12 @@ int main(int argc, char **argv) {
     if(!input_img)
         return 1;
 
-    if(resize)
-        output_img = resize_image(input_img, resize_factor, exception);
+    if(resize) {
+        if(resize_factor < 0.01)
+            output_img = resize_image_to(input_img, width, length, exception);
+        else
+            output_img = resize_image_by_factor(input_img, resize_factor, exception);
+    }
     else if(prn_pixel_info)
         print_pixel_info(input_img, x, y, exception);
     else if(prn_avg_color)
