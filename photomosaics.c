@@ -76,7 +76,7 @@ static Pixel get_img_avg_color(Image *image, const ssize_t x, const ssize_t y, c
         free(pixels);
         exit(1);
     }
-    Pixel p = get_avg_color(pixels, width, x, y, width, height);
+    Pixel p = get_avg_color(pixels, width, 0, y, width, height);
     free(pixels);
     return p;
 }
