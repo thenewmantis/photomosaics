@@ -21,7 +21,7 @@ static bool parse_float(char *str, float *out) {
     setlocale(LC_ALL, old_locale);
     return strncmp(str, endptr, strlen(str));
 }
-static bool parse_l(char *str, long *out) {
+static bool parse_long(char *str, long *out) {
     char *endptr;
     const char *old_locale = setlocale(LC_ALL, NULL);
     setlocale(LC_ALL|~LC_NUMERIC, "");
@@ -29,11 +29,11 @@ static bool parse_l(char *str, long *out) {
     setlocale(LC_ALL, old_locale);
     return strncmp(str, endptr, strlen(str));
 }
-static bool parse_ll(char *str, long long *out) {
+static bool parse_ulong(char *str, unsigned long *out) {
     char *endptr;
     const char *old_locale = setlocale(LC_ALL, NULL);
     setlocale(LC_ALL|~LC_NUMERIC, "");
-    *out = strtoll(str, &endptr, 10);
+    *out = strtoul(str, &endptr, 10);
     setlocale(LC_ALL, old_locale);
     return strncmp(str, endptr, strlen(str));
 }
@@ -153,9 +153,10 @@ int main(int argc, char **argv) {
     bool resize = false;
     bool splotch = false;
     ssize_t x = 0, y = 0;
+    size_t length = 1, width = 1;
 
     int opt;
-    while((opt=getopt(argc, argv, "ahi:l:no:r:sx:y:")) > -1) {
+    while((opt=getopt(argc, argv, "adhi:l:no:r:sw:x:y:")) > -1) {
         switch(opt) {
         case 'a':
             prn_avg_color = true;
@@ -168,6 +169,10 @@ int main(int argc, char **argv) {
             break;
         case 'i':
             strcpy(input_img_filename, optarg);
+            break;
+        case 'l':
+            if(!parse_ulong(optarg, &length))
+                DIE(2, "FATAL: Argument \"%s\" to option -l could not be parsed to a long long int.\n", optarg);
             break;
         case 'n':
             prn_pixel_info = true;
@@ -186,12 +191,16 @@ int main(int argc, char **argv) {
         case 's':
             splotch = true;
             break;
+        case 'w':
+            if(!parse_ulong(optarg, &width))
+                DIE(2, "FATAL: Argument \"%s\" to option -w could not be parsed to a long long int.\n", optarg);
+            break;
         case 'x':
-            if(!parse_l(optarg, &x))
+            if(!parse_long(optarg, &x))
                 DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to a long int.\n", optarg);
             break;
         case 'y':
-            if(!parse_l(optarg, &y))
+            if(!parse_long(optarg, &y))
                 DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to a long int.\n", optarg);
             break;
         }
@@ -203,8 +212,10 @@ int main(int argc, char **argv) {
         DIE(2, "FATAL: no input image specified.\n");
     if((resize || splotch) && strnlen(output_img_filename, 400) < 1)
         DIE(2, "FATAL: Must specify output image to resize or splotch.\n");
-    if((prn_pixel_info || prn_avg_color))
+    if(prn_pixel_info || prn_avg_color)
         fprintf(stderr, "point: %zu, %zu\n", x, y);
+    if(prn_avg_color || dumb_shrink || splotch)
+        fprintf(stderr, "dimensions: %zu x %zu\n", width, length);
 
     MagickCoreGenesis(*argv, MagickTrue);
     exception = AcquireExceptionInfo();
@@ -221,11 +232,11 @@ int main(int argc, char **argv) {
     else if(prn_pixel_info)
         print_pixel_info(input_img, x, y, exception);
     else if(prn_avg_color)
-        print_avg_color(input_img, x, y, 100, 100, exception);
+        print_avg_color(input_img, x, y, width, length, exception);
     else if(dumb_shrink)
-        output_img = make_img_avg_colors(input_img, 0, 0, 6, 5, exception);
+        output_img = make_img_avg_colors(input_img, 0, 0, width, length, exception);
     else if(splotch)
-        output_img = splotch_img(input_img, 100, 100, exception);
+        output_img = splotch_img(input_img, width, length, exception);
 
     if(exception->severity != UndefinedException)
         CatchException(exception);
