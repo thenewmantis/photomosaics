@@ -1,5 +1,6 @@
 #include <getopt.h>
 #include <locale.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -135,6 +136,68 @@ static Image *splotch_img(Image *image, const size_t each_width, const size_t ea
     if(!new_image)
         MagickError(exception->severity, exception->reason, exception->description);
     return new_image;
+}
+
+Pixel get_closest_pixel(Pixel p) {
+    FILE *avgs_list = fopen("al", "rb");
+    if(!avgs_list) exit(1);
+    unsigned char ps[315];
+    size_t z = fread(ps, 1, 315, avgs_list);
+    size_t i;
+    Pixel closest = {0};
+    float distance_of_closest = sqrtf(powf(0xff, 2) * 3); //max diff value
+    for(i=0; i < z; i+=3) {
+/*        if(p.r == ps[i] && p.g == ps[i+1] && p.b == ps[i+2]) {*/
+/*            closest.r = ps[i];*/
+/*            closest.g = ps[i+1];*/
+/*            closest.b = ps[i+2];*/
+/*            break;*/
+/*        }*/
+        //Need to calculate a difference that respects signs
+        int rdiff = (int)ps[i]   - p.r;
+        int gdiff = (int)ps[i+1] - p.g;
+        int bdiff = (int)ps[i+2] - p.b;
+        float new_distance = sqrtf(powf(rdiff, 2) + powf(gdiff, 2) + powf(bdiff, 2));
+        printf("%zu: %.2f\n", i/3, new_distance);
+        if(new_distance < distance_of_closest) {
+            distance_of_closest = new_distance;
+            closest.r = ps[i];
+            closest.g = ps[i+1];
+            closest.b = ps[i+2];
+        }
+    }
+    return closest;
+}
+
+static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, const size_t height, ExceptionInfo *exception) {
+    Pixel img_avgs[105];
+    FILE *f = popen("find $(find ~/pics -type d | grep -vE 'redacted|not_real') -maxdepth 1 -type f -print0", "r");
+#define IMG_LIST_SIZE 5091
+    char buf[IMG_LIST_SIZE];
+    fread(buf, 1, IMG_LIST_SIZE, f);
+    if(pclose(f)) exit(1);
+    for(int c=0, k=0; c < IMG_LIST_SIZE; k++) {
+        ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
+        image_info->filename[0] = 0;
+        strncat(image_info->filename, &buf[c], IMG_LIST_SIZE - c);
+        Image *src_img = ReadImage(image_info, exception);
+        Image *src_img_r = resize_image_to(src_img, width, height, exception);
+        unsigned char *pixels = malloc(width * height * 3);
+        ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels, exception);
+        img_avgs[k] = get_avg_color(pixels, width, 0, 0, width, height);
+        c += strnlen(&buf[c], IMG_LIST_SIZE - c) + 1;
+        DestroyImage(src_img);
+        DestroyImage(src_img_r);
+        DestroyImageInfo(image_info);
+    }
+    FILE *avgs_list = fopen("al", "wb");
+    if(!avgs_list) exit(1);
+    for(int i=0; i < 105; i++) {
+        char str[4] = {img_avgs[i].r, img_avgs[i].g, img_avgs[i].b,};
+        fwrite(str, 1, 3, avgs_list);
+    }
+    fclose(avgs_list);
+    return NULL;
 }
 
 int usage() {
