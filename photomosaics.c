@@ -30,6 +30,14 @@ static bool parse_long(char *str, long *out) {
     setlocale(LC_ALL, old_locale);
     return strncmp(str, endptr, strlen(str));
 }
+static bool parse_hex_tol(char *str, long *out) {
+    char *endptr;
+    const char *old_locale = setlocale(LC_ALL, NULL);
+    setlocale(LC_ALL|~LC_NUMERIC, "");
+    *out = strtol(str, &endptr, 16);
+    setlocale(LC_ALL, old_locale);
+    return strncmp(str, endptr, strlen(str));
+}
 static bool parse_ulong(char *str, unsigned long *out) {
     char *endptr;
     const char *old_locale = setlocale(LC_ALL, NULL);
@@ -138,35 +146,52 @@ static Image *splotch_img(Image *image, const size_t each_width, const size_t ea
     return new_image;
 }
 
-Pixel get_closest_pixel(Pixel p) {
-    FILE *avgs_list = fopen("al", "rb");
-    if(!avgs_list) exit(1);
-    unsigned char ps[315];
-    size_t z = fread(ps, 1, 315, avgs_list);
-    size_t i;
-    Pixel closest = {0};
+static bool get_closest_pixel(Pixel p, const size_t width, const size_t height, unsigned char *pixels_out, ExceptionInfo *exception) {
+    FILE *avgs_list = fopen("my_avgs", "r");
+    if(!avgs_list) return false;
+#define MY_AVGS_SIZE 5931
+    char buf[MY_AVGS_SIZE];
+    size_t z = fread(buf, 1, MY_AVGS_SIZE, avgs_list);
+/*    printf("Read %zu bytes from my_avgs.\n", z);*/
+    fclose(avgs_list);
+    char *filename = strtok(buf, " ");
+    char *closest_file = malloc(150);
     float distance_of_closest = sqrtf(powf(0xff, 2) * 3); //max diff value
-    for(i=0; i < z; i+=3) {
-/*        if(p.r == ps[i] && p.g == ps[i+1] && p.b == ps[i+2]) {*/
-/*            closest.r = ps[i];*/
-/*            closest.g = ps[i+1];*/
-/*            closest.b = ps[i+2];*/
-/*            break;*/
-/*        }*/
-        //Need to calculate a difference that respects signs
-        int rdiff = (int)ps[i]   - p.r;
-        int gdiff = (int)ps[i+1] - p.g;
-        int bdiff = (int)ps[i+2] - p.b;
+    do {
+        char *avg_p = strtok(NULL, "\n");
+        char rstr[3] = {avg_p[0], avg_p[1],};
+        char gstr[3] = {avg_p[2], avg_p[3],};
+        char bstr[3] = {avg_p[4], avg_p[5],};
+        long rdiff, gdiff, bdiff;
+        parse_hex_tol(rstr, &rdiff);
+        parse_hex_tol(gstr, &gdiff);
+        parse_hex_tol(bstr, &bdiff);
+        rdiff -= p.r;
+        gdiff -= p.g;
+        bdiff -= p.b;
         float new_distance = sqrtf(powf(rdiff, 2) + powf(gdiff, 2) + powf(bdiff, 2));
-        printf("%zu: %.2f\n", i/3, new_distance);
         if(new_distance < distance_of_closest) {
             distance_of_closest = new_distance;
-            closest.r = ps[i];
-            closest.g = ps[i+1];
-            closest.b = ps[i+2];
+            closest_file[0] = 0;
+            strncat(closest_file, filename, 150);
         }
-    }
-    return closest;
+    } while((filename=strtok(NULL, " ")) && filename < buf + MY_AVGS_SIZE);
+
+    size_t len = strnlen(closest_file, 150);
+    if(len < 1 || len >= 150)
+        return false;
+
+
+    closest_file[len-1] = 0; //Get rid of the colon
+    ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
+    strcpy(image_info->filename, closest_file);
+    Image *src_img = ReadImage(image_info, exception);
+    Image *src_img_r = resize_image_to(src_img, width, height, exception);
+    ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels_out, exception);
+    DestroyImage(src_img);
+    DestroyImage(src_img_r);
+    DestroyImageInfo(image_info);
+    return true;
 }
 
 static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, const size_t height, ExceptionInfo *exception) {
@@ -190,14 +215,55 @@ static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, cons
         DestroyImage(src_img_r);
         DestroyImageInfo(image_info);
     }
-    FILE *avgs_list = fopen("al", "wb");
-    if(!avgs_list) exit(1);
-    for(int i=0; i < 105; i++) {
-        char str[4] = {img_avgs[i].r, img_avgs[i].g, img_avgs[i].b,};
-        fwrite(str, 1, 3, avgs_list);
+/*    FILE *avgs_list = fopen("al", "wb");*/
+/*    if(!avgs_list) exit(1);*/
+/*    for(int i=0; i < 105; i++) {*/
+/*        char str[4] = {img_avgs[i].r, img_avgs[i].g, img_avgs[i].b,};*/
+/*        fwrite(str, 1, 3, avgs_list);*/
+/*    }*/
+/*    fclose(avgs_list);*/
+    FILE *my_avgs = fopen("my_avgs", "w");
+    if(!my_avgs) exit(1);
+    for(int i=0, c=0; i < 105 && c < IMG_LIST_SIZE; i++) {
+        fprintf(my_avgs, "%s: %02x%02x%02x\n", &buf[c], img_avgs[i].r, img_avgs[i].g, img_avgs[i].b);
+        c += strnlen(&buf[c], IMG_LIST_SIZE - c) + 1;
     }
-    fclose(avgs_list);
+    fclose(my_avgs);
     return NULL;
+}
+
+static Image *photomosaic(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
+    const size_t pixel_cnt = image->columns * image->rows;
+    unsigned char *pixels = malloc(pixel_cnt * 3);
+    if(!ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception)) {
+        free(pixels);
+        exit(1);
+    }
+    for(size_t i=0, j=0; i < pixel_cnt;) {
+        /*Specifying 0 for y allows us to automatically use i to "roll over" into next row*/
+        Pixel p = get_avg_color(pixels, image->columns, i, 0, each_width, each_height);
+        unsigned char *new_pixels = malloc(each_width * each_height * 3);
+        if(!get_closest_pixel(p, each_width, each_height, new_pixels, exception)) exit(1);
+        for(size_t c=0; c < each_width*each_height;) {
+            pixels[j] = new_pixels[c*3];
+            pixels[j+1] = new_pixels[c*3+1];
+            pixels[j+2] = new_pixels[c*3+2];
+            j += 3;
+            if(++c % each_width == 0)
+                j += (image->columns - each_width) * 3; //next row ...
+        }
+        i += each_width; //next splotch
+        /*If this row is done, skip over all the rows we just splotched*/
+        if(i % image->columns == 0)
+            i += image->columns * (each_height - 1);
+        j = i * 3;
+        free(new_pixels);
+    }
+    Image *new_image = ConstituteImage(image->columns, image->rows, "RGB", CharPixel, pixels, exception);
+    free(pixels);
+    if(!new_image)
+        MagickError(exception->severity, exception->reason, exception->description);
+    return new_image;
 }
 
 int usage() {
@@ -218,11 +284,12 @@ int main(int argc, char **argv) {
     bool prn_pixel_info = false;
     bool resize = false;
     bool splotch = false;
+    bool mosaic = false;
     ssize_t x = 0, y = 0;
     size_t length = 1, width = 1;
 
     int opt;
-    while((opt=getopt(argc, argv, "adhi:l:no:Rr:sw:x:y:")) > -1) {
+    while((opt=getopt(argc, argv, "adhi:l:mno:Rr:sw:x:y:")) > -1) {
         switch(opt) {
         case 'a':
             prn_avg_color = true;
@@ -239,6 +306,9 @@ int main(int argc, char **argv) {
         case 'l':
             if(!parse_ulong(optarg, &length))
                 DIE(2, "FATAL: Argument \"%s\" to option -l could not be parsed to a long long int.\n", optarg);
+            break;
+        case 'm':
+            mosaic = true;
             break;
         case 'n':
             prn_pixel_info = true;
@@ -275,15 +345,16 @@ int main(int argc, char **argv) {
         }
     }
 
-    if(!(prn_avg_color ^ dumb_shrink ^ prn_pixel_info  ^ resize ^ splotch))
-        DIE(2, "FATAL: must specify exactly one of: -a, -d, -n, -r, -s\n");
+
+    if(!(prn_avg_color ^ dumb_shrink ^ prn_pixel_info  ^ resize ^ splotch ^ mosaic))
+        DIE(2, "FATAL: must specify exactly one of: -a, -d, -n, (-r|-R), -s, -m\n");
     if(strnlen(input_img_filename, 400) < 1)
         DIE(2, "FATAL: no input image specified.\n");
     if((resize || splotch) && strnlen(output_img_filename, 400) < 1)
         DIE(2, "FATAL: Must specify output image to resize or splotch.\n");
     if(prn_pixel_info || prn_avg_color)
         fprintf(stderr, "point: %zu, %zu\n", x, y);
-    if(prn_avg_color || dumb_shrink || splotch || (resize && resize_factor < 0.01))
+    if(prn_avg_color || dumb_shrink || splotch || mosaic || (resize && resize_factor < 0.01))
         fprintf(stderr, "dimensions: %zu x %zu\n", width, length);
 
     MagickCoreGenesis(*argv, MagickTrue);
@@ -310,6 +381,8 @@ int main(int argc, char **argv) {
         output_img = make_img_avg_colors(input_img, 0, 0, width, length, exception);
     else if(splotch)
         output_img = splotch_img(input_img, width, length, exception);
+    else if(mosaic)
+        output_img = photomosaic(input_img, width, length, exception);
 
     if(exception->severity != UndefinedException)
         CatchException(exception);
