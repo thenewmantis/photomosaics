@@ -14,6 +14,8 @@ typedef struct {
     unsigned int r, g, b;
 } Pixel;
 
+static FILE *cache = NULL;
+
 static bool parse_float(char *str, float *out) {
     char *endptr;
     const char *old_locale = setlocale(LC_ALL, NULL);
@@ -45,6 +47,20 @@ static bool parse_ulong(char *str, unsigned long *out) {
     *out = strtoul(str, &endptr, 10);
     setlocale(LC_ALL, old_locale);
     return strncmp(str, endptr, strlen(str));
+}
+
+static bool cache_put(int nargs, ...) {
+    if(!cache) cache = fopen("~/.cache/photomosaics/avgs");
+    if(!cache) return false;
+    char *buf;
+    int ind = 0, chars_written;
+    va_list vl;
+    va_start(vl, nargs);
+    for(int i=0; i < nargs-1; i++, ind += chars_written)
+        chars_written = sprintf(buf[ind], "%s\t", va_arg(vl, char *));
+    sprintf(buf[ind], "%s\n", va_arg(vl, char *));
+    va_end(vl);
+    return true;
 }
 
 
@@ -386,6 +402,8 @@ int main(int argc, char **argv) {
 
     if(exception->severity != UndefinedException)
         CatchException(exception);
+
+    if(cache) fclose(cache);
     DestroyImage(input_img);
     DestroyImageInfo(image_info);
     if(output_img) {
