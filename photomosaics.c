@@ -14,7 +14,9 @@ typedef struct {
     unsigned int r, g, b;
 } Pixel;
 
+static const char *CACHE_FILENAME = "/home/wilson/.cache/photomosaics/avgs";
 static FILE *cache = NULL;
+static long cache_size = 0;
 
 static bool parse_float(char *str, float *out) {
     char *endptr;
@@ -49,17 +51,42 @@ static bool parse_ulong(char *str, unsigned long *out) {
     return strncmp(str, endptr, strlen(str));
 }
 
-static bool cache_put(int nargs, ...) {
-    if(!cache) cache = fopen("~/.cache/photomosaics/avgs");
-    if(!cache) return false;
-    char *buf;
-    int ind = 0, chars_written;
-    va_list vl;
-    va_start(vl, nargs);
-    for(int i=0; i < nargs-1; i++, ind += chars_written)
-        chars_written = sprintf(buf[ind], "%s\t", va_arg(vl, char *));
-    sprintf(buf[ind], "%s\n", va_arg(vl, char *));
-    va_end(vl);
+static bool cache_put_pixel(char *key, Pixel value) {
+    if(cache_size < 0)
+        return false;
+    if(!cache) {
+        cache = fopen(CACHE_FILENAME, "a+");
+        if(!cache) {
+            fprintf(stderr, "WARN: Couldn't open cache file %s. Please ensure the directory exists. Will stop attempting to cache for the remainder of execution.", CACHE_FILENAME);
+            cache_size = -1;
+            return false;
+        }
+        fseek(cache, 0, SEEK_END);
+        cache_size = ftell(cache);
+    }
+    rewind(cache);
+    char filename[150];
+    for(int i=0, fn_ind=0; i < cache_size;) {
+        // TODO handle this better in case EOF is an error
+        if((filename[fn_ind]=fgetc(cache)) == EOF) break;
+        i++;
+        if(filename[fn_ind] == '\t') {
+            filename[fn_ind] = 0;
+            if(!strncmp(filename, key, fn_ind)) {
+                //Already exists in cache
+                //TODO check timestamp
+                return true;
+            }
+            fn_ind = 0;
+            for(char tmp=fgetc(cache); i < cache_size && tmp != '\n'; i++) {
+                if(tmp == EOF) break;
+                tmp = fgetc(cache);
+            }
+        }
+        else fn_ind++;
+    }
+    fseek(cache, 0, SEEK_END);
+    fprintf(cache, "%s\t%02x%02x%02x\n", key, value.r, value.g, value.b); 
     return true;
 }
 
@@ -167,8 +194,7 @@ static bool get_closest_pixel(Pixel p, const size_t width, const size_t height, 
     if(!avgs_list) return false;
 #define MY_AVGS_SIZE 5931
     char buf[MY_AVGS_SIZE];
-    size_t z = fread(buf, 1, MY_AVGS_SIZE, avgs_list);
-/*    printf("Read %zu bytes from my_avgs.\n", z);*/
+    fread(buf, 1, MY_AVGS_SIZE, avgs_list);
     fclose(avgs_list);
     char *filename = strtok(buf, " ");
     char *closest_file = malloc(150);
@@ -189,7 +215,7 @@ static bool get_closest_pixel(Pixel p, const size_t width, const size_t height, 
         if(new_distance < distance_of_closest) {
             distance_of_closest = new_distance;
             closest_file[0] = 0;
-            strncat(closest_file, filename, 150);
+            strncat(closest_file, filename, 149);
         }
     } while((filename=strtok(NULL, " ")) && filename < buf + MY_AVGS_SIZE);
 
@@ -210,7 +236,7 @@ static bool get_closest_pixel(Pixel p, const size_t width, const size_t height, 
     return true;
 }
 
-static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, const size_t height, ExceptionInfo *exception) {
+static unsigned char *get_img_with_closest_avg(const size_t width, const size_t height, ExceptionInfo *exception) {
     Pixel img_avgs[105];
     FILE *f = popen("find $(find ~/pics -type d | grep -vE 'redacted|not_real') -maxdepth 1 -type f -print0", "r");
 #define IMG_LIST_SIZE 5091
@@ -220,31 +246,18 @@ static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, cons
     for(int c=0, k=0; c < IMG_LIST_SIZE; k++) {
         ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
         image_info->filename[0] = 0;
-        strncat(image_info->filename, &buf[c], IMG_LIST_SIZE - c);
+        strncat(image_info->filename, &buf[c], IMG_LIST_SIZE - c - 1);
         Image *src_img = ReadImage(image_info, exception);
         Image *src_img_r = resize_image_to(src_img, width, height, exception);
         unsigned char *pixels = malloc(width * height * 3);
         ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels, exception);
         img_avgs[k] = get_avg_color(pixels, width, 0, 0, width, height);
+        cache_put_pixel(&buf[c], img_avgs[k]);
         c += strnlen(&buf[c], IMG_LIST_SIZE - c) + 1;
         DestroyImage(src_img);
         DestroyImage(src_img_r);
         DestroyImageInfo(image_info);
     }
-/*    FILE *avgs_list = fopen("al", "wb");*/
-/*    if(!avgs_list) exit(1);*/
-/*    for(int i=0; i < 105; i++) {*/
-/*        char str[4] = {img_avgs[i].r, img_avgs[i].g, img_avgs[i].b,};*/
-/*        fwrite(str, 1, 3, avgs_list);*/
-/*    }*/
-/*    fclose(avgs_list);*/
-    FILE *my_avgs = fopen("my_avgs", "w");
-    if(!my_avgs) exit(1);
-    for(int i=0, c=0; i < 105 && c < IMG_LIST_SIZE; i++) {
-        fprintf(my_avgs, "%s: %02x%02x%02x\n", &buf[c], img_avgs[i].r, img_avgs[i].g, img_avgs[i].b);
-        c += strnlen(&buf[c], IMG_LIST_SIZE - c) + 1;
-    }
-    fclose(my_avgs);
     return NULL;
 }
 
