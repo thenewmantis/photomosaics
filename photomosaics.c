@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <getopt.h>
 #include <locale.h>
 #include <math.h>
@@ -5,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <MagickCore/MagickCore.h>
 
@@ -17,6 +19,7 @@ typedef struct {
 static const char *CACHE_FILENAME = "/home/wilson/.cache/photomosaics/avgs";
 static FILE *cache = NULL;
 static long cache_size = 0;
+static time_t cache_mtime;
 
 static bool parse_float(char *str, float *out) {
     char *endptr;
@@ -34,11 +37,11 @@ static bool parse_long(char *str, long *out) {
     setlocale(LC_ALL, old_locale);
     return strncmp(str, endptr, strlen(str));
 }
-static bool parse_hex_tol(char *str, long *out) {
+static bool parse_hex_tou(char *str, unsigned int *out) {
     char *endptr;
     const char *old_locale = setlocale(LC_ALL, NULL);
     setlocale(LC_ALL|~LC_NUMERIC, "");
-    *out = strtol(str, &endptr, 16);
+    *out = strtoul(str, &endptr, 16);
     setlocale(LC_ALL, old_locale);
     return strncmp(str, endptr, strlen(str));
 }
@@ -51,22 +54,37 @@ static bool parse_ulong(char *str, unsigned long *out) {
     return strncmp(str, endptr, strlen(str));
 }
 
-static bool cache_put_pixel(char *key, Pixel value) {
+static Pixel hexstr_top(char *hs) {
+    char rstr[3] = {hs[0], hs[1],};
+    char gstr[3] = {hs[2], hs[3],};
+    char bstr[3] = {hs[4], hs[5],};
+    Pixel p;
+    parse_hex_tou(rstr, &p.r);
+    parse_hex_tou(gstr, &p.g);
+    parse_hex_tou(bstr, &p.b);
+    return p;
+}
+
+static long cache_grep(char *key) {
     if(cache_size < 0)
-        return false;
+        return -1;
     if(!cache) {
         cache = fopen(CACHE_FILENAME, "a+");
-        if(!cache) {
+        struct stat tmp_st;
+        if((!cache) || stat(CACHE_FILENAME, &tmp_st)) {
             fprintf(stderr, "WARN: Couldn't open cache file %s. Please ensure the directory exists. Will stop attempting to cache for the remainder of execution.", CACHE_FILENAME);
             cache_size = -1;
-            return false;
+            return -1;
         }
+        cache_mtime = tmp_st.st_mtim.tv_sec;
         fseek(cache, 0, SEEK_END);
         cache_size = ftell(cache);
     }
     rewind(cache);
     char filename[150];
+    struct stat file_st;
     for(int i=0, fn_ind=0; i < cache_size;) {
+
         // TODO handle this better in case EOF is an error
         if((filename[fn_ind]=fgetc(cache)) == EOF) break;
         i++;
@@ -74,8 +92,8 @@ static bool cache_put_pixel(char *key, Pixel value) {
             filename[fn_ind] = 0;
             if(!strncmp(filename, key, fn_ind)) {
                 //Already exists in cache
-                //TODO check timestamp
-                return true;
+                assert(!stat(filename, &file_st));
+                break;
             }
             fn_ind = 0;
             for(char tmp=fgetc(cache); i < cache_size && tmp != '\n'; i++) {
@@ -85,6 +103,24 @@ static bool cache_put_pixel(char *key, Pixel value) {
         }
         else fn_ind++;
     }
+    if(file_st.st_mtim.tv_sec < cache_mtime) {
+        // Cache entry is up to date
+        return ftell(cache);
+    }
+    // For now, if it's not up to date, just pretend the file is not cached at all
+    return 0;
+}
+static bool cache_fetch_pixel(char *key, Pixel *value) {
+    long cache_pos = cache_grep(key);
+    if(cache_pos <= 0) return false;
+    assert(cache_pos == ftell(cache));
+    char hexstr[7];
+    assert(fgets(hexstr, 7, cache) && strlen(hexstr) == 6);
+    *value = hexstr_top(hexstr);
+    return true;
+}
+static bool cache_put_pixel(char *key, Pixel value) {
+    if(!cache) return false;
     fseek(cache, 0, SEEK_END);
     fprintf(cache, "%s\t%02x%02x%02x\n", key, value.r, value.g, value.b); 
     return true;
@@ -127,10 +163,7 @@ static Pixel get_avg_color(unsigned char *pixels, const size_t pixels_column_cnt
 }
 static Pixel get_img_avg_color(Image *image, const ssize_t x, const ssize_t y, const size_t width, const size_t height, ExceptionInfo *exception) {
     unsigned char *pixels = malloc(width * height * 3);
-    if(!ExportImagePixels(image, x, y, width, height, "RGB", CharPixel, pixels, exception)) {
-        free(pixels);
-        exit(1);
-    }
+    assert(ExportImagePixels(image, x, y, width, height, "RGB", CharPixel, pixels, exception));
     Pixel p = get_avg_color(pixels, width, 0, y, width, height);
     free(pixels);
     return p;
@@ -154,18 +187,14 @@ static Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssi
     }
     Image *new_image = ConstituteImage(image->columns / each_width, image->rows / each_height, "RGB", CharPixel, ps, exception);
     free(ps);
-    if(!new_image)
-        exit(1);
+    assert(new_image);
     return new_image;
 }
 
 static Image *splotch_img(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
     const size_t pixel_cnt = image->columns * image->rows;
     unsigned char *pixels = malloc(pixel_cnt * 3);
-    if(!ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception)) {
-        free(pixels);
-        exit(1);
-    }
+    assert(ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception));
     for(size_t i=0, j=0; i < pixel_cnt;) {
         /* Specifying 0 for y allows us to automatically use i to "roll over" into next row*/
         Pixel p = get_avg_color(pixels, image->columns, i, 0, each_width, each_height);
@@ -200,17 +229,11 @@ static bool get_closest_pixel(Pixel p, const size_t width, const size_t height, 
     char *closest_file = malloc(150);
     float distance_of_closest = sqrtf(powf(0xff, 2) * 3); //max diff value
     do {
-        char *avg_p = strtok(NULL, "\n");
-        char rstr[3] = {avg_p[0], avg_p[1],};
-        char gstr[3] = {avg_p[2], avg_p[3],};
-        char bstr[3] = {avg_p[4], avg_p[5],};
-        long rdiff, gdiff, bdiff;
-        parse_hex_tol(rstr, &rdiff);
-        parse_hex_tol(gstr, &gdiff);
-        parse_hex_tol(bstr, &bdiff);
-        rdiff -= p.r;
-        gdiff -= p.g;
-        bdiff -= p.b;
+        //TODO test after changes
+        Pixel tmp = hexstr_top(strtok(NULL, "\n"));
+        long rdiff = (long)tmp.r - p.r;
+        long gdiff = (long)tmp.g - p.g;
+        long bdiff = (long)tmp.b - p.b;
         float new_distance = sqrtf(powf(rdiff, 2) + powf(gdiff, 2) + powf(bdiff, 2));
         if(new_distance < distance_of_closest) {
             distance_of_closest = new_distance;
@@ -242,21 +265,23 @@ static unsigned char *get_img_with_closest_avg(const size_t width, const size_t 
 #define IMG_LIST_SIZE 5091
     char buf[IMG_LIST_SIZE];
     fread(buf, 1, IMG_LIST_SIZE, f);
-    if(pclose(f)) exit(1);
+    assert(!pclose(f));
     for(int c=0, k=0; c < IMG_LIST_SIZE; k++) {
-        ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
-        image_info->filename[0] = 0;
-        strncat(image_info->filename, &buf[c], IMG_LIST_SIZE - c - 1);
-        Image *src_img = ReadImage(image_info, exception);
-        Image *src_img_r = resize_image_to(src_img, width, height, exception);
-        unsigned char *pixels = malloc(width * height * 3);
-        ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels, exception);
-        img_avgs[k] = get_avg_color(pixels, width, 0, 0, width, height);
-        cache_put_pixel(&buf[c], img_avgs[k]);
+        if(!cache_fetch_pixel(&buf[c], &img_avgs[k])) {
+            ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
+            image_info->filename[0] = 0;
+            strncat(image_info->filename, &buf[c], IMG_LIST_SIZE - c - 1);
+            Image *src_img = ReadImage(image_info, exception);
+            Image *src_img_r = resize_image_to(src_img, width, height, exception);
+            unsigned char *pixels = malloc(width * height * 3);
+            ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels, exception);
+            img_avgs[k] = get_avg_color(pixels, width, 0, 0, width, height);
+            assert(cache_put_pixel(&buf[c], img_avgs[k]));
+            DestroyImage(src_img);
+            DestroyImage(src_img_r);
+            DestroyImageInfo(image_info);
+        }
         c += strnlen(&buf[c], IMG_LIST_SIZE - c) + 1;
-        DestroyImage(src_img);
-        DestroyImage(src_img_r);
-        DestroyImageInfo(image_info);
     }
     return NULL;
 }
@@ -264,15 +289,12 @@ static unsigned char *get_img_with_closest_avg(const size_t width, const size_t 
 static Image *photomosaic(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
     const size_t pixel_cnt = image->columns * image->rows;
     unsigned char *pixels = malloc(pixel_cnt * 3);
-    if(!ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception)) {
-        free(pixels);
-        exit(1);
-    }
+    assert(ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception));
     for(size_t i=0, j=0; i < pixel_cnt;) {
         /*Specifying 0 for y allows us to automatically use i to "roll over" into next row*/
         Pixel p = get_avg_color(pixels, image->columns, i, 0, each_width, each_height);
         unsigned char *new_pixels = malloc(each_width * each_height * 3);
-        if(!get_closest_pixel(p, each_width, each_height, new_pixels, exception)) exit(1);
+        assert(get_closest_pixel(p, each_width, each_height, new_pixels, exception));
         for(size_t c=0; c < each_width*each_height;) {
             pixels[j] = new_pixels[c*3];
             pixels[j+1] = new_pixels[c*3+1];
