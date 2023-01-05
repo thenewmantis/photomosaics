@@ -76,7 +76,7 @@ static long cache_grep(char *key) {
         cache = fopen(cache_filename, "a+");
         struct stat tmp_st;
         if((!cache) || stat(cache_filename, &tmp_st)) {
-            WARN("Couldn't open cache file %s. Please ensure the directory exists. Will stop attempting to cache for the remainder of execution.", cache_filename);
+            WARN("Couldn't open cache file '%s'. Please ensure the directory exists. Will stop attempting to cache for the remainder of execution.", cache_filename);
             cache_size = -1;
             return -1;
         }
@@ -466,8 +466,15 @@ int main(int argc, char **argv) {
         cache = fopen(cache_filename, "r");
         FILE *new_cache = fopen(new_cache_name, "w");
         if(!cache || !new_cache) {
-            WARN("Failed to open file %s in order to update the cache properly."
-                "The cache at %s may now contain duplicate entries.", new_cache_name, cache_filename);
+            if(!cache) {
+                WARN("Failed to reopen the cache file '%s' for reading "
+                    "in order to update the cache properly.", cache_filename);
+            }
+            else {
+                WARN("Failed to open file '%s' in order to update the cache properly.",
+                    new_cache_name);
+            }
+            WARN("The cache at '%s' may now contain duplicate entries.", cache_filename);
         }
         else while(1) {
             long pos = ftell(cache);
@@ -486,7 +493,7 @@ int main(int argc, char **argv) {
         fclose(new_cache);
         // TODO troubleshoot this rename
         if(rename(new_cache_name, cache_filename))
-            WARN("Failed to overwrite cache file %s."
+            WARN("Failed to overwrite cache file '%s'."
                 "The cache may now contain duplicate entries.", cache_filename);
         free(new_cache_name);
     }
