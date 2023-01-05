@@ -11,15 +11,18 @@
 #include <MagickCore/MagickCore.h>
 
 #define DIE(rc, ...)    { fprintf(stderr, __VA_ARGS__); return rc; }
+#define WARN(fmt, ...)    { fprintf(stderr, "WARN: "fmt, __VA_ARGS__); }
 
 typedef struct {
     unsigned int r, g, b;
 } Pixel;
 
-static const char *CACHE_FILENAME = "/home/wilson/.cache/photomosaics/avgs";
+static const char *cache_filename = "/home/wilson/.cache/photomosaics/avgs";
 static FILE *cache = NULL;
 static long cache_size = 0;
 static time_t cache_mtime;
+long *deletables;
+long deletables_ind = 0;
 
 static bool parse_float(char *str, float *out) {
     char *endptr;
@@ -69,51 +72,63 @@ static long cache_grep(char *key) {
     if(cache_size < 0)
         return -1;
     if(!cache) {
-        cache = fopen(CACHE_FILENAME, "a+");
+        /* init cache */
+        cache = fopen(cache_filename, "a+");
         struct stat tmp_st;
-        if((!cache) || stat(CACHE_FILENAME, &tmp_st)) {
-            fprintf(stderr, "WARN: Couldn't open cache file %s. Please ensure the directory exists. Will stop attempting to cache for the remainder of execution.", CACHE_FILENAME);
+        if((!cache) || stat(cache_filename, &tmp_st)) {
+            WARN("Couldn't open cache file %s. Please ensure the directory exists. Will stop attempting to cache for the remainder of execution.", cache_filename);
             cache_size = -1;
             return -1;
         }
         cache_mtime = tmp_st.st_mtim.tv_sec;
         fseek(cache, 0, SEEK_END);
         cache_size = ftell(cache);
+        /* Just a guess, will realloc later if needed */
+        deletables = malloc(50 * sizeof(long));
     }
+    if(cache_size == 0)
+        return -1;
     rewind(cache);
     char filename[150];
     struct stat file_st;
+    long filename_pos = 0;
     for(int i=0, fn_ind=0; i < cache_size;) {
-
         // TODO handle this better in case EOF is an error
-        if((filename[fn_ind]=fgetc(cache)) == EOF) break;
+        if((filename[fn_ind]=fgetc(cache)) == EOF) return -1;
         i++;
         if(filename[fn_ind] == '\t') {
             filename[fn_ind] = 0;
             if(!strncmp(filename, key, fn_ind)) {
                 //Already exists in cache
                 assert(!stat(filename, &file_st));
-                break;
+                if(file_st.st_mtim.tv_sec < cache_mtime) {
+                    /* Cache entry is up to date */
+                    return filename_pos;
+                }
+                /* Not up to date. Caller will create a new cache entry,
+                   then we will delete this line at the end of the program */
+                if(deletables_ind > 49) {
+                    deletables = realloc(deletables, (deletables_ind + 1) * sizeof(deletables[0]));
+                    assert(deletables != NULL);
+                }
+                deletables[deletables_ind++] = filename_pos;
+                return -1;
             }
             fn_ind = 0;
             for(char tmp=fgetc(cache); i < cache_size && tmp != '\n'; i++) {
-                if(tmp == EOF) break;
+                if(tmp == EOF) return -1;
                 tmp = fgetc(cache);
             }
+            /* Capture beginning of this line, in case this is the file in question */
+            filename_pos = ftell(cache);
         }
         else fn_ind++;
     }
-    if(file_st.st_mtim.tv_sec < cache_mtime) {
-        // Cache entry is up to date
-        return ftell(cache);
-    }
-    // For now, if it's not up to date, just pretend the file is not cached at all
-    return 0;
+    return -1;
 }
 static bool cache_fetch_pixel(char *key, Pixel *value) {
-    long cache_pos = cache_grep(key);
-    if(cache_pos <= 0) return false;
-    assert(cache_pos == ftell(cache));
+    long filename_pos = cache_grep(key);
+    if(filename_pos < 0) return false;
     char hexstr[7];
     assert(fgets(hexstr, 7, cache) && strlen(hexstr) == 6);
     *value = hexstr_top(hexstr);
@@ -250,6 +265,7 @@ static bool get_closest_pixel(Pixel p, const size_t width, const size_t height, 
     closest_file[len-1] = 0; //Get rid of the colon
     ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
     strcpy(image_info->filename, closest_file);
+    free(closest_file);
     Image *src_img = ReadImage(image_info, exception);
     Image *src_img_r = resize_image_to(src_img, width, height, exception);
     ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels_out, exception);
@@ -276,6 +292,7 @@ static unsigned char *get_img_with_closest_avg(const size_t width, const size_t 
             unsigned char *pixels = malloc(width * height * 3);
             ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels, exception);
             img_avgs[k] = get_avg_color(pixels, width, 0, 0, width, height);
+            free(pixels);
             assert(cache_put_pixel(&buf[c], img_avgs[k]));
             DestroyImage(src_img);
             DestroyImage(src_img_r);
@@ -438,7 +455,41 @@ int main(int argc, char **argv) {
     if(exception->severity != UndefinedException)
         CatchException(exception);
 
-    if(cache) fclose(cache);
+    if(cache) {
+        fclose(cache);
+        char line[150];
+        size_t len = strlen(cache_filename);
+        char *new_cache_name = malloc(len + 2);
+        strcpy(new_cache_name, cache_filename);
+        new_cache_name[len] = '2';
+        new_cache_name[len+1] = 0;
+        cache = fopen(cache_filename, "r");
+        FILE *new_cache = fopen(new_cache_name, "w");
+        if(!cache || !new_cache) {
+            WARN("Failed to open file %s in order to update the cache properly."
+                "The cache at %s may now contain duplicate entries.", new_cache_name, cache_filename);
+        }
+        else while(1) {
+            long pos = ftell(cache);
+            if(!fgets(line, 150, cache)) break;
+            bool keep = true;
+            for(int i=0; i < deletables_ind; i++) {
+                if(pos == deletables[i]) {
+                    keep = false;
+                    break;
+                }
+            }
+            if(keep) fputs(line, new_cache);
+        }
+        free(deletables);
+        fclose(cache);
+        fclose(new_cache);
+        // TODO troubleshoot this rename
+        if(rename(new_cache_name, cache_filename))
+            WARN("Failed to overwrite cache file %s."
+                "The cache may now contain duplicate entries.", cache_filename);
+        free(new_cache_name);
+    }
     DestroyImage(input_img);
     DestroyImageInfo(image_info);
     if(output_img) {
