@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 #include <MagickCore/MagickCore.h>
 
 #define DIE(rc, ...)    { fprintf(stderr, __VA_ARGS__); return rc; }
@@ -17,12 +18,19 @@ typedef struct {
     unsigned int r, g, b;
 } Pixel;
 
+#define MAX_FN_LEN 150
+#define IMG_LIST_SIZE 5091
+
 static const char *cache_filename = "/home/wilson/.cache/photomosaics/avgs";
 static FILE *cache = NULL;
 static long cache_size = 0;
 static time_t cache_mtime;
 long *deletables;
-long deletables_ind = 0;
+size_t deletables_ind = 0;
+char temp_dirname[] = "/tmp/photomosaics-XXXXXX";
+char **inner_cache_tmp_files;
+char **files_inner_cached = NULL;
+size_t files_inner_cached_ind = 0;
 
 static bool parse_float(char *str, float *out) {
     char *endptr;
@@ -89,7 +97,7 @@ static long cache_grep(char *key) {
     if(cache_size == 0)
         return -1;
     rewind(cache);
-    char filename[150];
+    char filename[MAX_FN_LEN];
     struct stat file_st;
     long filename_pos = 0;
     for(int i=0, fn_ind=0; i < cache_size;) {
@@ -233,74 +241,110 @@ static Image *splotch_img(Image *image, const size_t each_width, const size_t ea
     return new_image;
 }
 
-static bool get_closest_pixel(Pixel p, const size_t width, const size_t height, unsigned char *pixels_out, ExceptionInfo *exception) {
-    FILE *avgs_list = fopen("my_avgs", "r");
-    if(!avgs_list) return false;
-#define MY_AVGS_SIZE 5931
-    char buf[MY_AVGS_SIZE];
-    fread(buf, 1, MY_AVGS_SIZE, avgs_list);
-    fclose(avgs_list);
-    char *filename = strtok(buf, " ");
-    char *closest_file = malloc(150);
+static bool get_resized_pixel_info(char *filename, const size_t width, const size_t height, unsigned char *pixels_out, ExceptionInfo *exception) {
+    if(!files_inner_cached) {
+        inner_cache_tmp_files = malloc(IMG_LIST_SIZE * sizeof(char*));
+        files_inner_cached = malloc(IMG_LIST_SIZE * sizeof(char*));
+    }
+    const size_t pixels_arr_size = width * height * 3;
+    bool file_is_cached = false;
+    size_t i;
+    for(i=0; i < files_inner_cached_ind; i++) {
+        if(!strcmp(files_inner_cached[i], filename)) {
+            file_is_cached = true;
+            break;
+        }
+    }
+
+    if(file_is_cached) {
+        FILE *inner_cache = fopen(inner_cache_tmp_files[i], "rb");
+        assert(inner_cache);
+        size_t z = fread(pixels_out, 1, pixels_arr_size, inner_cache);
+        fclose(inner_cache);
+        return z == pixels_arr_size;
+    }
+    else {
+        if(files_inner_cached_ind == 0)
+            mkdtemp(temp_dirname);
+        const size_t filename_len = strlen(filename);
+        const size_t dirname_len = strlen(temp_dirname);
+        char *temp_name = malloc(filename_len);
+        char *temp_path = malloc(filename_len + dirname_len + 2);
+        temp_name[0] = 0;
+        strncat(temp_name, filename, filename_len);
+        /* TODO gracefully handle slashes (?) and percents in the filenames themselves */
+        for(size_t c=0; c < filename_len; ++c) if(temp_name[c] == '/') temp_name[c] = '%';
+        temp_path[0] = 0;
+        strncat(temp_path, temp_dirname, dirname_len);
+        temp_path[dirname_len] = '/';
+        temp_path[dirname_len+1] = 0;
+        strncat(temp_path, temp_name, filename_len);
+        free(temp_name);
+
+        FILE *inner_cache = fopen(temp_path, "wb");
+        assert(inner_cache);
+        ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
+        image_info->filename[0] = 0;
+        strncat(image_info->filename, filename, filename_len);
+        Image *src_img = ReadImage(image_info, exception);
+        Image *src_img_r = resize_image_to(src_img, width, height, exception);
+        ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels_out, exception);
+        if(exception->severity != UndefinedException) CatchException(exception);
+        DestroyImage(src_img);
+        DestroyImage(src_img_r);
+        DestroyImageInfo(image_info);
+        assert(fwrite(pixels_out, 3, pixels_arr_size / 3, inner_cache) == pixels_arr_size / 3);
+        fclose(inner_cache);
+        inner_cache_tmp_files[files_inner_cached_ind] = malloc(strlen(temp_path) + 1);
+        strcpy(inner_cache_tmp_files[files_inner_cached_ind], temp_path);
+        files_inner_cached[files_inner_cached_ind] = malloc(strlen(filename) + 1);
+        files_inner_cached[files_inner_cached_ind][0] = 0;
+        strncat(files_inner_cached[files_inner_cached_ind++], filename, filename_len);
+        return true;
+    }
+}
+
+static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, const size_t height, ExceptionInfo *exception) {
+    FILE *f = popen("find $(find ~/pics -type d | grep -vE 'redacted|not_real') -maxdepth 1 -type f -print0", "r");
+    char buf[IMG_LIST_SIZE];
+    const size_t pixels_arr_size = width * height * 3;
+    unsigned char *pixels_of_closest = malloc(pixels_arr_size);
+    unsigned char *pixels = malloc(pixels_arr_size);
     float distance_of_closest = sqrtf(powf(0xff, 2) * 3); //max diff value
-    do {
-        //TODO test after changes
-        Pixel tmp = hexstr_top(strtok(NULL, "\n"));
-        long rdiff = (long)tmp.r - p.r;
-        long gdiff = (long)tmp.g - p.g;
-        long bdiff = (long)tmp.b - p.b;
+    bool test_pxofcls_populated = false;
+
+    fread(buf, 1, IMG_LIST_SIZE, f);
+    assert(!pclose(f));
+
+    for(int c=0; c < IMG_LIST_SIZE;) {
+        Pixel avg;
+        bool fetched_avg_from_cache = cache_fetch_pixel(&buf[c], &avg);
+        if(!fetched_avg_from_cache) {
+            assert(get_resized_pixel_info(&buf[c], width, height, pixels, exception));
+            avg = get_avg_color(pixels, width, 0, 0, width, height);
+            assert(cache_put_pixel(&buf[c], avg));
+        }
+        long rdiff = (long)avg.r - p.r;
+        long gdiff = (long)avg.g - p.g;
+        long bdiff = (long)avg.b - p.b;
         float new_distance = sqrtf(powf(rdiff, 2) + powf(gdiff, 2) + powf(bdiff, 2));
         if(new_distance < distance_of_closest) {
             distance_of_closest = new_distance;
-            closest_file[0] = 0;
-            strncat(closest_file, filename, 149);
-        }
-    } while((filename=strtok(NULL, " ")) && filename < buf + MY_AVGS_SIZE);
-
-    size_t len = strnlen(closest_file, 150);
-    if(len < 1 || len >= 150)
-        return false;
-
-
-    closest_file[len-1] = 0; //Get rid of the colon
-    ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
-    strcpy(image_info->filename, closest_file);
-    free(closest_file);
-    Image *src_img = ReadImage(image_info, exception);
-    Image *src_img_r = resize_image_to(src_img, width, height, exception);
-    ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels_out, exception);
-    DestroyImage(src_img);
-    DestroyImage(src_img_r);
-    DestroyImageInfo(image_info);
-    return true;
-}
-
-static unsigned char *get_img_with_closest_avg(const size_t width, const size_t height, ExceptionInfo *exception) {
-    Pixel img_avgs[105];
-    FILE *f = popen("find $(find ~/pics -type d | grep -vE 'redacted|not_real') -maxdepth 1 -type f -print0", "r");
-#define IMG_LIST_SIZE 5091
-    char buf[IMG_LIST_SIZE];
-    fread(buf, 1, IMG_LIST_SIZE, f);
-    assert(!pclose(f));
-    for(int c=0, k=0; c < IMG_LIST_SIZE; k++) {
-        if(!cache_fetch_pixel(&buf[c], &img_avgs[k])) {
-            ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
-            image_info->filename[0] = 0;
-            strncat(image_info->filename, &buf[c], IMG_LIST_SIZE - c - 1);
-            Image *src_img = ReadImage(image_info, exception);
-            Image *src_img_r = resize_image_to(src_img, width, height, exception);
-            unsigned char *pixels = malloc(width * height * 3);
-            ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels, exception);
-            img_avgs[k] = get_avg_color(pixels, width, 0, 0, width, height);
-            free(pixels);
-            assert(cache_put_pixel(&buf[c], img_avgs[k]));
-            DestroyImage(src_img);
-            DestroyImage(src_img_r);
-            DestroyImageInfo(image_info);
+            if(fetched_avg_from_cache)
+                assert(get_resized_pixel_info(&buf[c], width, height, pixels, exception));
+            // For now, return any perfect match
+            if(new_distance < 0.01f) {
+               free(pixels_of_closest);
+               return pixels;
+            }
+            memcpy(pixels_of_closest, pixels, pixels_arr_size);
+            test_pxofcls_populated = true;
         }
         c += strnlen(&buf[c], IMG_LIST_SIZE - c) + 1;
     }
-    return NULL;
+    assert(test_pxofcls_populated);
+    free(pixels);
+    return pixels_of_closest;
 }
 
 static Image *photomosaic(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
@@ -310,8 +354,7 @@ static Image *photomosaic(Image *image, const size_t each_width, const size_t ea
     for(size_t i=0, j=0; i < pixel_cnt;) {
         /*Specifying 0 for y allows us to automatically use i to "roll over" into next row*/
         Pixel p = get_avg_color(pixels, image->columns, i, 0, each_width, each_height);
-        unsigned char *new_pixels = malloc(each_width * each_height * 3);
-        assert(get_closest_pixel(p, each_width, each_height, new_pixels, exception));
+        unsigned char *new_pixels = get_img_with_closest_avg(p, each_width, each_height, exception);
         for(size_t c=0; c < each_width*each_height;) {
             pixels[j] = new_pixels[c*3];
             pixels[j+1] = new_pixels[c*3+1];
@@ -427,6 +470,7 @@ int main(int argc, char **argv) {
 
     MagickCoreGenesis(*argv, MagickTrue);
     exception = AcquireExceptionInfo();
+
     image_info = CloneImageInfo((ImageInfo *)NULL);
     strcpy(image_info->filename, input_img_filename);
     input_img = ReadImage(image_info, exception);
@@ -435,18 +479,18 @@ int main(int argc, char **argv) {
     if(!input_img)
         return 1;
 
-    if(resize) {
+    if(prn_avg_color)
+        print_avg_color(input_img, x, y, width, length, exception);
+    else if(dumb_shrink)
+        output_img = make_img_avg_colors(input_img, 0, 0, width, length, exception);
+    else if(prn_pixel_info)
+        print_pixel_info(input_img, x, y, exception);
+    else if(resize) {
         if(resize_factor < 0.01)
             output_img = resize_image_to(input_img, width, length, exception);
         else
             output_img = resize_image_by_factor(input_img, resize_factor, exception);
     }
-    else if(prn_pixel_info)
-        print_pixel_info(input_img, x, y, exception);
-    else if(prn_avg_color)
-        print_avg_color(input_img, x, y, width, length, exception);
-    else if(dumb_shrink)
-        output_img = make_img_avg_colors(input_img, 0, 0, width, length, exception);
     else if(splotch)
         output_img = splotch_img(input_img, width, length, exception);
     else if(mosaic)
@@ -455,9 +499,17 @@ int main(int argc, char **argv) {
     if(exception->severity != UndefinedException)
         CatchException(exception);
 
+    if(files_inner_cached) {
+        for(size_t i=0; i < files_inner_cached_ind; i++) {
+            free(inner_cache_tmp_files[i]);
+            free(files_inner_cached[i]);
+        }
+        free(inner_cache_tmp_files);
+        free(files_inner_cached);
+    }
     if(cache) {
         fclose(cache);
-        char line[150];
+        char line[MAX_FN_LEN];
         size_t len = strlen(cache_filename);
         char *new_cache_name = malloc(len + 2);
         strcpy(new_cache_name, cache_filename);
@@ -478,9 +530,9 @@ int main(int argc, char **argv) {
         }
         else while(1) {
             long pos = ftell(cache);
-            if(!fgets(line, 150, cache)) break;
+            if(!fgets(line, MAX_FN_LEN, cache)) break;
             bool keep = true;
-            for(int i=0; i < deletables_ind; i++) {
+            for(size_t i=0; i < deletables_ind; i++) {
                 if(pos == deletables[i]) {
                     keep = false;
                     break;
