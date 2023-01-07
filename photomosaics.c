@@ -19,7 +19,7 @@ typedef struct {
 } Pixel;
 
 #define MAX_FN_LEN 150
-#define IMG_LIST_SIZE 5091
+#define IMG_LIST_MAX_SIZE 5091
 
 static const char *cache_filename = "/home/wilson/.cache/photomosaics/avgs";
 static FILE *cache = NULL;
@@ -117,7 +117,7 @@ static long cache_grep(char *key) {
                    then we will delete this line at the end of the program */
                 if(deletables_ind > 49) {
                     deletables = realloc(deletables, (deletables_ind + 1) * sizeof(deletables[0]));
-                    assert(deletables != NULL);
+                    assert(deletables);
                 }
                 deletables[deletables_ind++] = filename_pos;
                 return -1;
@@ -243,8 +243,8 @@ static Image *splotch_img(Image *image, const size_t each_width, const size_t ea
 
 static bool get_resized_pixel_info(char *filename, const size_t width, const size_t height, unsigned char *pixels_out, ExceptionInfo *exception) {
     if(!files_inner_cached) {
-        inner_cache_tmp_files = malloc(IMG_LIST_SIZE * sizeof(char*));
-        files_inner_cached = malloc(IMG_LIST_SIZE * sizeof(char*));
+        inner_cache_tmp_files = malloc(IMG_LIST_MAX_SIZE * sizeof(char*));
+        files_inner_cached = malloc(IMG_LIST_MAX_SIZE * sizeof(char*));
     }
     const size_t pixels_arr_size = width * height * 3;
     bool file_is_cached = false;
@@ -264,6 +264,7 @@ static bool get_resized_pixel_info(char *filename, const size_t width, const siz
         return z == pixels_arr_size;
     }
     else {
+        /* TODO delete tempdir at end of execution */
         if(files_inner_cached_ind == 0)
             mkdtemp(temp_dirname);
         const size_t filename_len = strlen(filename);
@@ -304,25 +305,20 @@ static bool get_resized_pixel_info(char *filename, const size_t width, const siz
     }
 }
 
-static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, const size_t height, ExceptionInfo *exception) {
-    FILE *f = popen("find $(find ~/pics -type d | grep -vE 'redacted|not_real') -maxdepth 1 -type f -print0", "r");
-    char buf[IMG_LIST_SIZE];
+static unsigned char *get_img_with_closest_avg(char *img_list, size_t img_list_size, Pixel p, const size_t width, const size_t height, ExceptionInfo *exception) {
     const size_t pixels_arr_size = width * height * 3;
     unsigned char *pixels_of_closest = malloc(pixels_arr_size);
     unsigned char *pixels = malloc(pixels_arr_size);
     float distance_of_closest = sqrtf(powf(0xff, 2) * 3); //max diff value
     bool test_pxofcls_populated = false;
 
-    fread(buf, 1, IMG_LIST_SIZE, f);
-    assert(!pclose(f));
-
-    for(int c=0; c < IMG_LIST_SIZE;) {
+    for(size_t c=0; c < img_list_size;) {
         Pixel avg;
-        bool fetched_avg_from_cache = cache_fetch_pixel(&buf[c], &avg);
+        bool fetched_avg_from_cache = cache_fetch_pixel(&img_list[c], &avg);
         if(!fetched_avg_from_cache) {
-            assert(get_resized_pixel_info(&buf[c], width, height, pixels, exception));
+            assert(get_resized_pixel_info(&img_list[c], width, height, pixels, exception));
             avg = get_avg_color(pixels, width, 0, 0, width, height);
-            assert(cache_put_pixel(&buf[c], avg));
+            assert(cache_put_pixel(&img_list[c], avg));
         }
         long rdiff = (long)avg.r - p.r;
         long gdiff = (long)avg.g - p.g;
@@ -331,7 +327,7 @@ static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, cons
         if(new_distance < distance_of_closest) {
             distance_of_closest = new_distance;
             if(fetched_avg_from_cache)
-                assert(get_resized_pixel_info(&buf[c], width, height, pixels, exception));
+                assert(get_resized_pixel_info(&img_list[c], width, height, pixels, exception));
             // For now, return any perfect match
             if(new_distance < 0.01f) {
                free(pixels_of_closest);
@@ -340,7 +336,7 @@ static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, cons
             memcpy(pixels_of_closest, pixels, pixels_arr_size);
             test_pxofcls_populated = true;
         }
-        c += strnlen(&buf[c], IMG_LIST_SIZE - c) + 1;
+        c += strnlen(&img_list[c], img_list_size - c) + 1;
     }
     assert(test_pxofcls_populated);
     free(pixels);
@@ -350,11 +346,17 @@ static unsigned char *get_img_with_closest_avg(Pixel p, const size_t width, cons
 static Image *photomosaic(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
     const size_t pixel_cnt = image->columns * image->rows;
     unsigned char *pixels = malloc(pixel_cnt * 3);
+    FILE *f = popen("find $(find ~/pics -type d | grep -vE 'redacted|not_real') -maxdepth 1 -type f -print0", "r");
+    char buf[IMG_LIST_MAX_SIZE];
+    size_t bytes_read = fread(buf, 1, IMG_LIST_MAX_SIZE, f);
+    assert(!pclose(f));
+
     assert(ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception));
+
     for(size_t i=0, j=0; i < pixel_cnt;) {
         /*Specifying 0 for y allows us to automatically use i to "roll over" into next row*/
         Pixel p = get_avg_color(pixels, image->columns, i, 0, each_width, each_height);
-        unsigned char *new_pixels = get_img_with_closest_avg(p, each_width, each_height, exception);
+        unsigned char *new_pixels = get_img_with_closest_avg(buf, bytes_read, p, each_width, each_height, exception);
         for(size_t c=0; c < each_width*each_height;) {
             pixels[j] = new_pixels[c*3];
             pixels[j+1] = new_pixels[c*3+1];
@@ -543,7 +545,6 @@ int main(int argc, char **argv) {
         free(deletables);
         fclose(cache);
         fclose(new_cache);
-        // TODO troubleshoot this rename
         if(rename(new_cache_name, cache_filename))
             WARN("Failed to overwrite cache file '%s'."
                 "The cache may now contain duplicate entries.", cache_filename);
