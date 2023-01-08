@@ -1,5 +1,7 @@
 #include <assert.h>
+#include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <locale.h>
 #include <math.h>
 #include <stdbool.h>
@@ -17,6 +19,7 @@
 typedef struct {
     unsigned int r, g, b;
 } Pixel;
+typedef enum { L, UL, XU, XUL, F } NUM_TYPES;
 
 #define MAX_FN_LEN 150
 #define IMG_LIST_MAX_SIZE 5091
@@ -32,37 +35,54 @@ char **inner_cache_tmp_files;
 char **files_inner_cached = NULL;
 size_t files_inner_cached_ind = 0;
 
-static bool parse_float(char *str, float *out) {
+static bool parse_num(const char *str, NUM_TYPES type, void *out) {
     char *endptr;
     const char *old_locale = setlocale(LC_ALL, NULL);
     setlocale(LC_ALL|~LC_NUMERIC, "");
-    *out = strtof(str, &endptr);
+    errno = 0;
+    int my_errno = 0;
+
+    switch(type) {
+    case L:
+        *((long *)out) = strtol(str, &endptr, 10);
+        break;
+    case UL:
+        *((unsigned long *)out) = strtoul(str, &endptr, 10);
+        break;
+    case XU: {
+            unsigned long tmp = strtoul(str, &endptr, 16);
+            if(tmp > UINT_MAX) my_errno = ERANGE;
+            else *((unsigned int *)out) = tmp;
+        }
+        break;
+    case XUL:
+        *((unsigned long *)out) = strtoul(str, &endptr, 16);
+        break;
+    case F:
+        *((float *)out) = strtof(str, &endptr);
+        break;
+    }
+
     setlocale(LC_ALL, old_locale);
-    return strncmp(str, endptr, strlen(str));
+    if(errno) return false;
+    if(my_errno) { 
+        errno = my_errno;
+        return false;
+    }
+    /*N.B. fails on "partial" conversions or if str is empty*/
+    return *str != '\0' && *endptr == '\0';
+}
+static bool parse_float(char *str, float *out) {
+    return parse_num(str, F, out);
 }
 static bool parse_long(char *str, long *out) {
-    char *endptr;
-    const char *old_locale = setlocale(LC_ALL, NULL);
-    setlocale(LC_ALL|~LC_NUMERIC, "");
-    *out = strtol(str, &endptr, 10);
-    setlocale(LC_ALL, old_locale);
-    return strncmp(str, endptr, strlen(str));
+    return parse_num(str, L, out);
 }
 static bool parse_hex_tou(char *str, unsigned int *out) {
-    char *endptr;
-    const char *old_locale = setlocale(LC_ALL, NULL);
-    setlocale(LC_ALL|~LC_NUMERIC, "");
-    *out = strtoul(str, &endptr, 16);
-    setlocale(LC_ALL, old_locale);
-    return strncmp(str, endptr, strlen(str));
+    return parse_num(str, XU, out);
 }
 static bool parse_ulong(char *str, unsigned long *out) {
-    char *endptr;
-    const char *old_locale = setlocale(LC_ALL, NULL);
-    setlocale(LC_ALL|~LC_NUMERIC, "");
-    *out = strtoul(str, &endptr, 10);
-    setlocale(LC_ALL, old_locale);
-    return strncmp(str, endptr, strlen(str));
+    return parse_num(str, UL, out);
 }
 
 static Pixel hexstr_top(char *hs) {
