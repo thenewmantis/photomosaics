@@ -13,8 +13,8 @@
 #include <unistd.h>
 #include <MagickCore/MagickCore.h>
 
-#define DIE(rc, ...)    { fprintf(stderr, __VA_ARGS__); return rc; }
-#define WARN(fmt, ...)    { fprintf(stderr, "WARN: "fmt, __VA_ARGS__); }
+#define DIE(rc, fmt, ...)    { fprintf(stderr, "FATAL: "fmt"\n", __VA_ARGS__); return rc; }
+#define WARN(fmt, ...)       { fprintf(stderr, "WARN: " fmt"\n", __VA_ARGS__); }
 
 typedef struct {
     unsigned int r, g, b;
@@ -39,7 +39,7 @@ static size_t files_inner_cached_ind = 0;
 #    pragma GCC diagnostic push
 #    pragma GCC diagnostic ignored "-Wsign-compare"
 #endif
-size_t slen(const char *s, size_t maxlen) {
+static size_t slen(const char *s, size_t maxlen) {
     char *pos = memchr(s, '\0', maxlen);
     return pos ? pos - s : maxlen;
 }
@@ -464,7 +464,7 @@ int main(int argc, char **argv) {
             break;
         case 'l':
             if(!parse_ulong(optarg, &length))
-                DIE(2, "FATAL: Argument \"%s\" to option -l could not be parsed to a long long int.\n", optarg);
+                DIE(2, "Argument \"%s\" to option -l could not be parsed to a long long int.", optarg);
             break;
         case 'm':
             mosaic = true;
@@ -480,10 +480,10 @@ int main(int argc, char **argv) {
             break;
         case 'r':
             if(!parse_float(optarg, &resize_factor))
-                DIE(2, "FATAL: Argument \"%s\" to option -r could not be parsed to a float.\n", optarg);
+                DIE(2, "Argument \"%s\" to option -r could not be parsed to a float.", optarg);
             // TODO implement a more robust maximum
             if(resize_factor < 0.01 || resize_factor > 10.0)
-                DIE(2, "resize_factor %.1f is out of bounds. Should be greater than 0 and no more than 10.\n", resize_factor);
+                DIE(2, "resize_factor %.1f is out of bounds. Should be greater than 0 and no more than 10.", resize_factor);
             resize = true;
             break;
         case 's':
@@ -527,7 +527,7 @@ int main(int argc, char **argv) {
     if(exception->severity != UndefinedException)
         CatchException(exception);
     if(!input_img)
-        return 1;
+        DIE(1, "Input image %s could not be read.", input_img_filename);
 
     if(prn_avg_color)
         print_avg_color(input_img, x, y, width, length, exception);
