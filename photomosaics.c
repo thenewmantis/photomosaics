@@ -28,12 +28,12 @@ static const char *cache_filename = "/home/wilson/.cache/photomosaics/avgs";
 static FILE *cache = NULL;
 static long cache_size = 0;
 static time_t cache_mtime;
-long *deletables;
-size_t deletables_ind = 0;
-char temp_dirname[] = "/tmp/photomosaics-XXXXXX";
-char **inner_cache_tmp_files;
-char **files_inner_cached = NULL;
-size_t files_inner_cached_ind = 0;
+static long *deletables;
+static size_t deletables_ind = 0;
+static char temp_dirname[] = "/tmp/photomosaics-XXXXXX";
+static char **inner_cache_tmp_files;
+static char **files_inner_cached = NULL;
+static size_t files_inner_cached_ind = 0;
 
 static bool parse_num(const char *str, NUM_TYPES type, void *out) {
     char *endptr;
@@ -399,8 +399,22 @@ static Image *photomosaic(Image *image, const size_t each_width, const size_t ea
     return new_image;
 }
 
-int usage() {
-    return 0;
+void usage(char *progname) {
+    fprintf(stderr,
+        "Usage: %s (-h | (-i <input_file> ((-a|-n) "
+        "| (-d|(-r <resize_factor> |-R)|-s|-m) -o <output_file>) "
+        "[-w <width> -l <length>] [-x <x_pos> -y <y_pos>]))\n"
+        "\t-a \t\t Print average color of the given section of the file. The starting point is ('x_pos', 'y_pos') (0,0 by default). The size of the section is 'width' x 'length' (1,1 by default).\n"
+        "\t-d \t\t 'Dumb shrink' the image. Reduces each block of the file of size 'width' x 'length' to a single pixel of the average color of each.\n"
+        "\t-h \t\t Print this help message and exit.\n"
+        "\t-m \t\t Make a photomosaic of the image by replacing each block of 'input_file' of size 'width' x 'length' by the resized version of some image with a similar average color.\n"
+        "\t-n \t\t Print the RGB values of the pixel at the position ('x_pos', 'y_pos') in 'input_file'.\n"
+        "\t-s \t\t Create a splotchy version of 'input_file' by averaging out the color of each block of the image of size 'width' x 'length'\n"
+        "Exit status:\n"
+        "\t0\tSpecified operation succeeded\n"
+        "\t1\tError reading or performing some operation on an image"
+        "\t2\tError parsing command line arguments. No output could be produced.\n"
+        , progname);
 }
 
 int main(int argc, char **argv) {
@@ -431,8 +445,8 @@ int main(int argc, char **argv) {
             dumb_shrink = true;
             break;
         case 'h':
-            return usage();
-            break;
+            usage(argv[0]);
+            return 0;
         case 'i':
             strcpy(input_img_filename, optarg);
             break;
@@ -558,7 +572,7 @@ int main(int argc, char **argv) {
             if(!fgets(line, MAX_FN_LEN, cache)) break;
             bool keep = true;
             for(size_t i=0; i < deletables_ind; i++) {
-                if(pos == deletables[i]) {
+                if(deletables[i] == pos) {
                     keep = false;
                     break;
                 }
