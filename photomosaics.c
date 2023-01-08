@@ -521,13 +521,26 @@ int main(int argc, char **argv) {
     if(exception->severity != UndefinedException)
         CatchException(exception);
 
+
+    DestroyImage(input_img);
+    DestroyImageInfo(image_info);
+    if(output_img) {
+        new_image_info = CloneImageInfo((ImageInfo *)NULL);
+        strcpy(output_img->filename, output_img_filename);
+        WriteImage(new_image_info, output_img, exception);
+        DestroyImage(output_img);
+        DestroyImageInfo(new_image_info);
+    }
+    DestroyExceptionInfo(exception);
+    MagickCoreTerminus();
+
     if(files_inner_cached) {
         for(size_t i=0; i < files_inner_cached_ind; i++) {
+            if(remove(inner_cache_tmp_files[i])) perror("remove");
             free(inner_cache_tmp_files[i]);
             free(files_inner_cached[i]);
         }
-        free(inner_cache_tmp_files);
-        free(files_inner_cached);
+        if(remove(temp_dirname)) perror("remove");
     }
     if(cache) {
         fclose(cache);
@@ -538,16 +551,18 @@ int main(int argc, char **argv) {
         new_cache_name[len] = '2';
         new_cache_name[len+1] = 0;
         cache = fopen(cache_filename, "r");
+        errno = 0;
+        if(!cache) {
+            WARN("Failed to reopen the cache file '%s' for reading "
+                "in order to update the cache properly:", cache_filename);
+            perror("fopen");
+        }
         FILE *new_cache = fopen(new_cache_name, "w");
-        if(!cache || !new_cache) {
-            if(!cache) {
-                WARN("Failed to reopen the cache file '%s' for reading "
-                    "in order to update the cache properly.", cache_filename);
-            }
-            else {
-                WARN("Failed to open file '%s' in order to update the cache properly.",
-                    new_cache_name);
-            }
+        if(!new_cache) {
+            WARN("Failed to open file '%s' in order to update the cache properly:", new_cache_name);
+            perror("fopen");
+        }
+        if(errno) {
             WARN("The cache at '%s' may now contain duplicate entries.", cache_filename);
         }
         else while(1) {
@@ -565,21 +580,12 @@ int main(int argc, char **argv) {
         free(deletables);
         fclose(cache);
         fclose(new_cache);
-        if(rename(new_cache_name, cache_filename))
-            WARN("Failed to overwrite cache file '%s'."
-                "The cache may now contain duplicate entries.", cache_filename);
+        if(rename(new_cache_name, cache_filename)) {
+            WARN("Overwriting cache file '%s' failed:", cache_filename);
+            perror("rename");
+            WARN("The cache at '%s' may now contain duplicate entries.", cache_filename);
+        }
         free(new_cache_name);
     }
-    DestroyImage(input_img);
-    DestroyImageInfo(image_info);
-    if(output_img) {
-        new_image_info = CloneImageInfo((ImageInfo *)NULL);
-        strcpy(output_img->filename, output_img_filename);
-        WriteImage(new_image_info, output_img, exception);
-        DestroyImage(output_img);
-        DestroyImageInfo(new_image_info);
-    }
-    DestroyExceptionInfo(exception);
-    MagickCoreTerminus();
     return 0;
 }
