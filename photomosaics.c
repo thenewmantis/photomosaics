@@ -35,17 +35,10 @@ static char **inner_cache_tmp_files;
 static char **files_inner_cached = NULL;
 static size_t files_inner_cached_ind = 0;
 
-#if defined(__GNUC__) || defined(__GNUG__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wsign-compare"
-#endif
 static size_t slen(const char *s, size_t maxlen) {
     char *pos = memchr(s, '\0', maxlen);
-    return pos ? pos - s : maxlen;
+    return pos ? (size_t)(pos - s) : maxlen;
 }
-#if defined(__GNUC__) || defined(__GNUG__)
-#    pragma GCC diagnostic pop
-#endif
 
 static bool parse_num(const char *str, NUM_TYPES type, void *out) {
     char *endptr;
