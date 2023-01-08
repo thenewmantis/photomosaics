@@ -522,18 +522,6 @@ int main(int argc, char **argv) {
         CatchException(exception);
 
 
-    DestroyImage(input_img);
-    DestroyImageInfo(image_info);
-    if(output_img) {
-        new_image_info = CloneImageInfo((ImageInfo *)NULL);
-        strcpy(output_img->filename, output_img_filename);
-        WriteImage(new_image_info, output_img, exception);
-        DestroyImage(output_img);
-        DestroyImageInfo(new_image_info);
-    }
-    DestroyExceptionInfo(exception);
-    MagickCoreTerminus();
-
     if(files_inner_cached) {
         for(size_t i=0; i < files_inner_cached_ind; i++) {
             if(remove(inner_cache_tmp_files[i])) perror("remove");
@@ -587,5 +575,17 @@ int main(int argc, char **argv) {
         }
         free(new_cache_name);
     }
+
+    if(output_img) {
+        new_image_info = CloneImageInfo((ImageInfo *)NULL);
+        strcpy(output_img->filename, output_img_filename);
+        WriteImage(new_image_info, output_img, exception);
+        DestroyImage(output_img);
+        DestroyImageInfo(new_image_info);
+    }
+    DestroyImage(input_img);
+    DestroyImageInfo(image_info);
+    DestroyExceptionInfo(exception);
+    MagickCoreTerminus();
     return 0;
 }
