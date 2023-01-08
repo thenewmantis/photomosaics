@@ -35,6 +35,18 @@ static char **inner_cache_tmp_files;
 static char **files_inner_cached = NULL;
 static size_t files_inner_cached_ind = 0;
 
+#if defined(__GNUC__) || defined(__GNUG__)
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wsign-compare"
+#endif
+size_t slen(const char *s, size_t maxlen) {
+    char *pos = memchr(s, '\0', maxlen);
+    return pos ? pos - s : maxlen;
+}
+#if defined(__GNUC__) || defined(__GNUG__)
+#    pragma GCC diagnostic pop
+#endif
+
 static bool parse_num(const char *str, NUM_TYPES type, void *out) {
     char *endptr;
     const char *old_locale = setlocale(LC_ALL, NULL);
@@ -108,7 +120,7 @@ static long cache_grep(char *key) {
             cache_size = -1;
             return -1;
         }
-        cache_mtime = tmp_st.st_mtim.tv_sec;
+        cache_mtime = tmp_st.st_mtime;
         fseek(cache, 0, SEEK_END);
         cache_size = ftell(cache);
         /* Just a guess, will realloc later if needed */
@@ -129,7 +141,7 @@ static long cache_grep(char *key) {
             if(!strncmp(filename, key, fn_ind)) {
                 //Already exists in cache
                 assert(!stat(filename, &file_st));
-                if(file_st.st_mtim.tv_sec < cache_mtime) {
+                if(file_st.st_mtime < cache_mtime) {
                     /* Cache entry is up to date */
                     return filename_pos;
                 }
@@ -356,7 +368,7 @@ static unsigned char *get_img_with_closest_avg(char *img_list, size_t img_list_s
             memcpy(pixels_of_closest, pixels, pixels_arr_size);
             test_pxofcls_populated = true;
         }
-        c += strnlen(&img_list[c], img_list_size - c) + 1;
+        c += slen(&img_list[c], img_list_size - c) + 1;
     }
     assert(test_pxofcls_populated);
     free(pixels);
@@ -479,26 +491,28 @@ int main(int argc, char **argv) {
             break;
         case 'w':
             if(!parse_ulong(optarg, &width))
-                DIE(2, "FATAL: Argument \"%s\" to option -w could not be parsed to a long long int.\n", optarg);
+                DIE(2, "Argument \"%s\" to option -w could not be parsed to a long long int.", optarg);
             break;
         case 'x':
             if(!parse_long(optarg, &x))
-                DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to a long int.\n", optarg);
+                DIE(2, "Argument \"%s\" to option -x could not be parsed to a long int.", optarg);
             break;
         case 'y':
             if(!parse_long(optarg, &y))
-                DIE(2, "FATAL: Argument \"%s\" to option -x could not be parsed to a long int.\n", optarg);
+                DIE(2, "Argument \"%s\" to option -x could not be parsed to a long int.", optarg);
             break;
         }
     }
 
 
-    if(!(prn_avg_color ^ dumb_shrink ^ prn_pixel_info  ^ resize ^ splotch ^ mosaic))
-        DIE(2, "FATAL: must specify exactly one of: -a, -d, -n, (-r|-R), -s, -m\n");
-    if(strnlen(input_img_filename, 400) < 1)
-        DIE(2, "FATAL: no input image specified.\n");
-    if((resize || splotch) && strnlen(output_img_filename, 400) < 1)
-        DIE(2, "FATAL: Must specify output image to resize or splotch.\n");
+    if(!(prn_avg_color ^ dumb_shrink ^ prn_pixel_info  ^ resize ^ splotch ^ mosaic)) {
+        DIE(2, "Must specify exactly one of: -a, -d, -h -n, (-r|-R), -s, -m"
+            "%s -h for usage.", argv[0]);
+    }
+    if(slen(input_img_filename, 400) < 1)
+        DIE(2, "No input image specified.%s", "");
+    if((resize || splotch) && slen(output_img_filename, 400) < 1)
+        DIE(2, "Must specify output image to resize or splotch.%s", "");
     if(prn_pixel_info || prn_avg_color)
         fprintf(stderr, "point: %zu, %zu\n", x, y);
     if(prn_avg_color || dumb_shrink || splotch || mosaic || (resize && resize_factor < 0.01))
