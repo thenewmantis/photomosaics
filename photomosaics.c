@@ -25,8 +25,9 @@ typedef enum { L, UL, XU, XUL, F } NUM_TYPES;
 #define IMG_LIST_MAX_SIZE 5091
 
 static const char *cache_filename = "/home/wilson/.cache/photomosaics/avgs";
-static FILE *cache = NULL;
-static long cache_size = 0;
+static char *cache_buf = NULL;
+static size_t cache_max_size;
+static ssize_t cache_size = 0;
 static time_t cache_mtime;
 static long *deletables;
 static size_t deletables_ind = 0;
@@ -37,6 +38,10 @@ static size_t files_inner_cached_ind = 0;
 
 static size_t slen(const char *s, size_t maxlen) {
     char *pos = memchr(s, '\0', maxlen);
+    return pos ? (size_t)(pos - s) : maxlen;
+}
+static size_t indof(const char *s, char ch, size_t maxlen) {
+    char *pos = memchr(s, ch, maxlen);
     return pos ? (size_t)(pos - s) : maxlen;
 }
 
@@ -90,7 +95,7 @@ static bool parse_ulong(char *str, unsigned long *out) {
     return parse_num(str, UL, out);
 }
 
-static Pixel hexstr_top(char *hs) {
+static Pixel hexstr_top(const char *hs) {
     char rstr[3] = {hs[0], hs[1],};
     char gstr[3] = {hs[2], hs[3],};
     char bstr[3] = {hs[4], hs[5],};
@@ -101,76 +106,118 @@ static Pixel hexstr_top(char *hs) {
     return p;
 }
 
-static long cache_grep(char *key) {
-    if(cache_size < 0)
+static ssize_t cache_grep(char *key) {
+    if(cache_size == -1)
         return -1;
-    if(!cache) {
+    if(!cache_buf) {
         /* init cache */
-        cache = fopen(cache_filename, "a+");
-        struct stat tmp_st;
-        if((!cache) || stat(cache_filename, &tmp_st)) {
-            WARN("Couldn't open cache file '%s'. Please ensure the directory exists. Will stop attempting to cache for the remainder of execution.", cache_filename);
+        errno = 0;
+        FILE *cache_file = fopen(cache_filename, "r");
+        struct stat cache_st;
+        if(!cache_file) {
+            WARN("Couldn't open cache file '%s'. "
+                "Please ensure the directory exists.", cache_filename);
+            perror("fopen");
+        }
+        else {
+            if(stat(cache_filename, &cache_st) && errno == ENOENT) {
+                /* stat failed; create the file and try again just in case */
+                errno = 0;
+                FILE *tmp_cache_file = fopen(cache_filename, "a");
+                if(!tmp_cache_file) {
+                    WARN("Couldn't open cache file '%s'. "
+                        "Please ensure the directory exists.", cache_filename);
+                    perror("fopen");
+                }
+                else {
+                    assert(!fclose(tmp_cache_file));
+                    if(stat(cache_filename, &cache_st)) {
+                        WARN("Could not stat cache file '%s'", cache_filename);
+                        perror("stat");
+                    }
+                }
+            }
+        }
+        if(errno) {
+            WARN("Will stop attempting to cache to %s for the remainder of execution.", cache_filename);
             cache_size = -1;
             return -1;
         }
-        cache_mtime = tmp_st.st_mtime;
-        fseek(cache, 0, SEEK_END);
-        cache_size = ftell(cache);
-        /* Just a guess, will realloc later if needed */
+
+        /* No errors, proceed to populate cache_buf */
+
+        cache_mtime = cache_st.st_mtime;
+        long cache_file_size = cache_st.st_size;
+        /* The following 2 mallocs are guesses; will realloc later if needed */
+        cache_max_size = (cache_file_size < 5822 ? 5822 : cache_file_size) + 5 * MAX_FN_LEN;
+        cache_buf = malloc(cache_max_size);
+        cache_buf[0] = 0; /* For the initial strncat later */
         deletables = malloc(50 * sizeof(long));
+        cache_size = fread(cache_buf, 1, cache_file_size, cache_file);
+        assert(cache_size == cache_file_size);
+        assert(!fclose(cache_file));
     }
-    if(cache_size == 0)
-        return -1;
-    rewind(cache);
+
+    if(cache_size == 0) return -1;
+
     char filename[MAX_FN_LEN];
     struct stat file_st;
-    long filename_pos = 0;
-    for(int i=0, fn_ind=0; i < cache_size;) {
-        // TODO handle this better in case EOF is an error
-        if((filename[fn_ind]=fgetc(cache)) == EOF) return -1;
-        i++;
-        if(filename[fn_ind] == '\t') {
-            filename[fn_ind] = 0;
-            if(!strncmp(filename, key, fn_ind)) {
-                //Already exists in cache
-                assert(!stat(filename, &file_st));
-                if(file_st.st_mtime < cache_mtime) {
-                    /* Cache entry is up to date */
-                    return filename_pos;
-                }
-                /* Not up to date. Caller will create a new cache entry,
-                   then we will delete this line at the end of the program */
-                if(deletables_ind > 49) {
-                    deletables = realloc(deletables, (deletables_ind + 1) * sizeof(deletables[0]));
-                    assert(deletables);
-                }
-                deletables[deletables_ind++] = filename_pos;
-                return -1;
+
+    for(ssize_t i=0, line_no=1; i < cache_size; line_no++) {
+        size_t fn_len = 0;
+        size_t fn_begin = i;
+        for(; i < cache_size; i++) {
+            if((filename[i-fn_begin]=cache_buf[i]) == '\t') {
+                fn_len = i - fn_begin;
+                filename[fn_len] = '\0';
+                i++;
+                break;
             }
-            fn_ind = 0;
-            for(char tmp=fgetc(cache); i < cache_size && tmp != '\n'; i++) {
-                if(tmp == EOF) return -1;
-                tmp = fgetc(cache);
-            }
-            /* Capture beginning of this line, in case this is the file in question */
-            filename_pos = ftell(cache);
         }
-        else fn_ind++;
+        assert(fn_len);
+        if(!strncmp(filename, key, fn_len)) {
+            //Already exists in cache
+            assert(!stat(filename, &file_st));
+            if(file_st.st_mtime < cache_mtime) {
+                /* Cache entry is up to date */
+                return i;
+            }
+            /* Not up to date. Caller will create a new cache entry,
+               then we will delete this line at the end of the program */
+            if(deletables_ind > 49) {
+                deletables = realloc(deletables, (deletables_ind + 1) * sizeof(deletables[0]));
+                assert(deletables);
+            }
+            deletables[deletables_ind++] = fn_begin;
+            return -1;
+        }
+        while(cache_buf[i++] != '\n');
     }
     return -1;
 }
 static bool cache_fetch_pixel(char *key, Pixel *value) {
-    long filename_pos = cache_grep(key);
-    if(filename_pos < 0) return false;
+    ssize_t i = cache_grep(key);
+    if(i == -1) return false;
     char hexstr[7];
-    assert(fgets(hexstr, 7, cache) && strlen(hexstr) == 6);
+    assert(indof(cache_buf + i, '\n', cache_size - i) == 6);
+    hexstr[0] = 0;
+    strncat(hexstr, cache_buf + i, 6);
     *value = hexstr_top(hexstr);
     return true;
 }
 static bool cache_put_pixel(char *key, Pixel value) {
-    if(!cache) return false;
-    fseek(cache, 0, SEEK_END);
-    fprintf(cache, "%s\t%02x%02x%02x\n", key, value.r, value.g, value.b); 
+    if(!cache_buf) return false;
+    char entry[MAX_FN_LEN + 9];
+    int entry_length = sprintf(entry, "%s\t%02x%02x%02x\n", key, value.r, value.g, value.b);
+    size_t new_size_of_cache = cache_size + entry_length;
+    if(new_size_of_cache > cache_max_size) {
+        assert((cache_buf=realloc(cache_buf, new_size_of_cache)));
+        cache_max_size = new_size_of_cache;
+    }
+    strncat(cache_buf, entry, entry_length);
+    cache_size = new_size_of_cache;
+    cache_mtime = time(NULL);
+    assert(cache_mtime > 0);
     return true;
 }
 
@@ -289,7 +336,6 @@ static bool get_resized_pixel_info(char *filename, const size_t width, const siz
         return z == pixels_arr_size;
     }
     else {
-        /* TODO delete tempdir at end of execution */
         if(files_inner_cached_ind == 0)
             mkdtemp(temp_dirname);
         const size_t filename_len = strlen(filename);
@@ -542,7 +588,7 @@ int main(int argc, char **argv) {
     if(exception->severity != UndefinedException)
         CatchException(exception);
 
-
+    /* Teardown */
     if(files_inner_cached) {
         for(size_t i=0; i < files_inner_cached_ind; i++) {
             if(remove(inner_cache_tmp_files[i])) perror("remove");
@@ -551,50 +597,29 @@ int main(int argc, char **argv) {
         }
         if(remove(temp_dirname)) perror("remove");
     }
-    if(cache) {
-        fclose(cache);
-        char line[MAX_FN_LEN];
-        size_t len = strlen(cache_filename);
-        char *new_cache_name = malloc(len + 2);
-        strcpy(new_cache_name, cache_filename);
-        new_cache_name[len] = '2';
-        new_cache_name[len+1] = 0;
-        cache = fopen(cache_filename, "r");
-        errno = 0;
+    if(cache_buf) {
+        FILE *cache = fopen(cache_filename, "w");
         if(!cache) {
-            WARN("Failed to reopen the cache file '%s' for reading "
+            WARN("Failed to reopen the cache file '%s' for writing "
                 "in order to update the cache properly:", cache_filename);
             perror("fopen");
-        }
-        FILE *new_cache = fopen(new_cache_name, "w");
-        if(!new_cache) {
-            WARN("Failed to open file '%s' in order to update the cache properly:", new_cache_name);
-            perror("fopen");
-        }
-        if(errno) {
             WARN("The cache at '%s' may now contain duplicate entries.", cache_filename);
         }
-        else while(1) {
-            long pos = ftell(cache);
-            if(!fgets(line, MAX_FN_LEN, cache)) break;
+        else for(ssize_t i=0; i < cache_size;) {
             bool keep = true;
-            for(size_t i=0; i < deletables_ind; i++) {
-                if(deletables[i] == pos) {
+            for(size_t j=0; j < deletables_ind; j++) {
+                if(deletables[j] == i) {
                     keep = false;
                     break;
                 }
             }
-            if(keep) fputs(line, new_cache);
+            size_t line_len = indof(cache_buf + i, '\n', cache_size - i);
+            if(keep) for(size_t j=0; j <= line_len; j++) assert(fputc(cache_buf[i+j], cache) != EOF);
+            i += line_len + 1;
         }
+        if(cache) fclose(cache);
         free(deletables);
-        fclose(cache);
-        fclose(new_cache);
-        if(rename(new_cache_name, cache_filename)) {
-            WARN("Overwriting cache file '%s' failed:", cache_filename);
-            perror("rename");
-            WARN("The cache at '%s' may now contain duplicate entries.", cache_filename);
-        }
-        free(new_cache_name);
+        free(cache_buf);
     }
 
     if(output_img) {
