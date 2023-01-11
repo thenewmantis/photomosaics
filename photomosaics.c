@@ -27,6 +27,7 @@ typedef enum { L, UL, XU, XUL, F } NUM_TYPES;
 static const char *cache_filename = "/home/wilson/.cache/photomosaics/avgs";
 static char *cache_buf = NULL;
 static size_t cache_max_size;
+static ssize_t initial_cache_size = 1;
 static ssize_t cache_size = 0;
 static time_t cache_mtime;
 static long *deletables;
@@ -139,7 +140,7 @@ static ssize_t cache_grep(char *key) {
             }
         }
         if(errno) {
-            WARN("Will stop attempting to cache to %s for the remainder of execution.", cache_filename);
+            WARN("Will stop attempting to cache to '%s' for the remainder of execution.", cache_filename);
             cache_size = -1;
             return -1;
         }
@@ -153,7 +154,8 @@ static ssize_t cache_grep(char *key) {
         cache_buf = malloc(cache_max_size);
         cache_buf[0] = 0; /* For the initial strncat later */
         deletables = malloc(50 * sizeof(long));
-        cache_size = fread(cache_buf, 1, cache_file_size, cache_file);
+        initial_cache_size = cache_size = fread(cache_buf, 1, cache_file_size, cache_file);
+
         assert(cache_size == cache_file_size);
         assert(!fclose(cache_file));
     }
@@ -178,7 +180,8 @@ static ssize_t cache_grep(char *key) {
         if(!strncmp(filename, key, fn_len)) {
             //Already exists in cache
             assert(!stat(filename, &file_st));
-            if(file_st.st_mtime < cache_mtime) {
+            //The sole use of `initial_...`. Prevents the caller from re- and recaching newly-added files
+            if(i > initial_cache_size - 1 || file_st.st_mtime < cache_mtime) {
                 /* Cache entry is up to date */
                 return i;
             }
@@ -216,7 +219,6 @@ static bool cache_put_pixel(char *key, Pixel value) {
     }
     strncat(cache_buf, entry, entry_length);
     cache_size = new_size_of_cache;
-    cache_mtime = time(NULL);
     assert(cache_mtime > 0);
     return true;
 }
@@ -453,18 +455,25 @@ static Image *photomosaic(Image *image, const size_t each_width, const size_t ea
 void usage(char *progname) {
     fprintf(stderr,
         "Usage: %s (-h | (-i <input_file> ((-a|-n) "
-        "| (-d|(-r <resize_factor> |-R)|-s|-m) -o <output_file>) "
+        "| ((-d|(-r <resize_factor> |-R)|-s|-m) -o <output_file>)) "
         "[-w <width> -l <length>] [-x <x_pos> -y <y_pos>]))\n"
-        "\t-a \t\t Print average color of the given section of the file. The starting point is ('x_pos', 'y_pos') (0,0 by default). The size of the section is 'width' x 'length' (1,1 by default).\n"
-        "\t-d \t\t 'Dumb shrink' the image. Reduces each block of the file of size 'width' x 'length' to a single pixel of the average color of each.\n"
-        "\t-h \t\t Print this help message and exit.\n"
-        "\t-m \t\t Make a photomosaic of the image by replacing each block of 'input_file' of size 'width' x 'length' by the resized version of some image with a similar average color.\n"
-        "\t-n \t\t Print the RGB values of the pixel at the position ('x_pos', 'y_pos') in 'input_file'.\n"
-        "\t-s \t\t Create a splotchy version of 'input_file' by averaging out the color of each block of the image of size 'width' x 'length'\n"
-        "Exit status:\n"
+        "\t-a\tPrint average color of the given section of the file.\n\t\t"
+        "The starting point is ('x_pos', 'y_pos') (0,0 by default).\n\t\t"
+        "The size of the section is 'width' x 'length' (1,1 by default).\n"
+        "\t-d\t'Dumb shrink' the image. Reduces each block of the file of size\n\t\t"
+        "'width' x 'length' to a single pixel of the average color of each.\n"
+        "\t-h\tPrint this help message and exit.\n"
+        "\t-m\tMake a photomosaic of the image by replacing each block\n\t\t"
+        "of 'input_file' of size 'width' x 'length' by the resized\n\t\t"
+        "version of some image with a similar average color.\n"
+        "\t-n\tPrint the RGB values of the pixel at the\n\t\t"
+        "position ('x_pos', 'y_pos') in 'input_file'.\n"
+        "\t-s\tCreate a splotchy version of 'input_file' by averaging out\n\t\t"
+        "the color of each block of the image of size 'width' x 'length'.\n"
+        "\n\nExit status:\n"
         "\t0\tSpecified operation succeeded\n"
-        "\t1\tError reading or performing some operation on an image"
-        "\t2\tError parsing command line arguments. No output could be produced.\n"
+        "\t1\tError reading or performing some operation on an image\n"
+        "\t2\tError parsing command line arguments\n"
         , progname);
 }
 
