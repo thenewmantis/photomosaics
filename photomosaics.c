@@ -152,9 +152,9 @@ static ssize_t cache_grep(char *key) {
         /* The following 2 mallocs are guesses; will realloc later if needed */
         cache_max_size = (cache_file_size < 5822 ? 5822 : cache_file_size) + 5 * MAX_FN_LEN;
         cache_buf = malloc(cache_max_size);
-        cache_buf[0] = 0; /* For the initial strncat later */
         deletables = malloc(50 * sizeof(long));
         initial_cache_size = cache_size = fread(cache_buf, 1, cache_file_size, cache_file);
+        cache_buf[cache_size] = 0; /* For the initial strncat later */
 
         assert(cache_size == cache_file_size);
         assert(!fclose(cache_file));
@@ -194,7 +194,7 @@ static ssize_t cache_grep(char *key) {
             deletables[deletables_ind++] = fn_begin;
             return -1;
         }
-        while(cache_buf[i++] != '\n');
+        while(i < cache_size && cache_buf[i++] != '\n');
     }
     return -1;
 }
@@ -212,14 +212,13 @@ static bool cache_put_pixel(char *key, Pixel value) {
     if(!cache_buf) return false;
     char entry[MAX_FN_LEN + 9];
     int entry_length = sprintf(entry, "%s\t%02x%02x%02x\n", key, value.r, value.g, value.b);
-    size_t new_size_of_cache = cache_size + entry_length;
+    size_t new_size_of_cache = cache_size + entry_length + 1;
     if(new_size_of_cache > cache_max_size) {
         assert((cache_buf=realloc(cache_buf, new_size_of_cache)));
         cache_max_size = new_size_of_cache;
     }
     strncat(cache_buf, entry, entry_length);
-    cache_size = new_size_of_cache;
-    assert(cache_mtime > 0);
+    cache_size = new_size_of_cache - 1;
     return true;
 }
 
@@ -374,6 +373,7 @@ static bool get_resized_pixel_info(char *filename, const size_t width, const siz
         files_inner_cached[files_inner_cached_ind] = malloc(strlen(filename) + 1);
         files_inner_cached[files_inner_cached_ind][0] = 0;
         strncat(files_inner_cached[files_inner_cached_ind++], filename, filename_len);
+        free(temp_path);
         return true;
     }
 }
