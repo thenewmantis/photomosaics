@@ -165,7 +165,7 @@ static ssize_t cache_grep(char *key) {
     char filename[MAX_FN_LEN];
     struct stat file_st;
 
-    for(ssize_t i=0, line_no=1; i < cache_size; i += indof(cache_buf + i, '\n', cache_size - i) + 1, line_no++) {
+    for(ssize_t i=0; i < cache_size; i += indof(cache_buf + i, '\n', cache_size - i) + 1) {
         /* If we already marked it for deletion, we want the image's cache entry which
            we put at the bottom of the buffer, in case the avg color has changed. */
         bool skip = false;
