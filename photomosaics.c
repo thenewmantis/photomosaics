@@ -87,12 +87,12 @@ static bool parse_num(const char *str, NUM_TYPES type, void *out) {
     /*N.B. fails on "partial" conversions or if str is empty*/
     return *str != '\0' && *endptr == '\0';
 }
-static bool parse_float(char *str, float *out) {
-    return parse_num(str, F, out);
-}
-static bool parse_long(char *str, long *out) {
-    return parse_num(str, L, out);
-}
+/*static bool parse_float(char *str, float *out) {*/
+/*    return parse_num(str, F, out);*/
+/*}*/
+/*static bool parse_long(char *str, long *out) {*/
+/*    return parse_num(str, L, out);*/
+/*}*/
 static bool parse_hex_tou(char *str, unsigned int *out) {
     return parse_num(str, XU, out);
 }
@@ -240,24 +240,6 @@ static bool cache_put(char *key, Pixel value) {
 }
 
 
-static Image *resize_image_to(Image *image, const size_t new_width, const size_t new_height, ExceptionInfo  *exception) {
-    Image *new_image = ResizeImage(image, new_width, new_height, LanczosFilter, exception);
-    if(!new_image)
-        MagickError(exception->severity, exception->reason, exception->description);
-    return new_image;
-}
-
-static Image *resize_image_by_factor(Image *image, float resize_factor, ExceptionInfo *exception) {
-    return resize_image_to(image, image->columns * resize_factor, image->rows * resize_factor, exception);
-}
-
-static void print_pixel_info(Image *image, const ssize_t x, const ssize_t y, ExceptionInfo *exception) {
-    unsigned char pixels[3];
-    if(ExportImagePixels(image, x, y, 1, 1, "RGB", CharPixel, pixels, exception))
-        printf("RGB: %d, %d, %d\n", pixels[0], pixels[1], pixels[2]);
-/*        printf("RGB: 0x%02hhx, 0x%02hhx, 0x%02hhx\n", pixels[0], pixels[1], pixels[2]);*/
-}
-
 static Pixel get_avg_color(unsigned char *pixels, const size_t pixels_column_cnt, const ssize_t x, const ssize_t y, const size_t width, const size_t height) {
     Pixel p = {0};
     int i = y * pixels_column_cnt + x * 3;
@@ -273,62 +255,6 @@ static Pixel get_avg_color(unsigned char *pixels, const size_t pixels_column_cnt
     p.g /= width*height;
     p.b /= width*height;
     return p;
-}
-static Pixel get_img_avg_color(Image *image, const ssize_t x, const ssize_t y, const size_t width, const size_t height, ExceptionInfo *exception) {
-    unsigned char *pixels = malloc(width * height * 3);
-    assert(ExportImagePixels(image, x, y, width, height, "RGB", CharPixel, pixels, exception));
-    Pixel p = get_avg_color(pixels, width, 0, y, width, height);
-    free(pixels);
-    return p;
-}
-
-static void print_avg_color(Image *image, unsigned int x, unsigned int y, const size_t width, const size_t height, ExceptionInfo *exception) {
-    Pixel p = get_img_avg_color(image, x, y, width, height, exception);
-    printf("RGB: %d, %d, %d\n", p.r, p.g, p.b);
-}
-
-static Image *make_img_avg_colors(Image *image, const ssize_t first_x, const ssize_t first_y, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
-    unsigned char *ps = malloc((image->columns / each_width) * (image->rows / each_height) * 3);
-    int i = 0;
-    for(size_t y=first_y; y < image->rows; y+=each_height) {
-        for(size_t x=first_x; x < image->columns; x+=each_width, i+=3) {
-            Pixel p = get_img_avg_color(image, x, y, each_width, each_height, exception);
-            ps[i] = p.r;
-            ps[i+1] = p.g;
-            ps[i+2] = p.b;
-        }
-    }
-    Image *new_image = ConstituteImage(image->columns / each_width, image->rows / each_height, "RGB", CharPixel, ps, exception);
-    free(ps);
-    assert(new_image);
-    return new_image;
-}
-
-static Image *splotch_img(Image *image, const size_t each_width, const size_t each_height, ExceptionInfo *exception) {
-    const size_t pixel_cnt = image->columns * image->rows;
-    unsigned char *pixels = malloc(pixel_cnt * 3);
-    assert(ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception));
-    for(size_t i=0, j=0; i < pixel_cnt;) {
-        /* Specifying 0 for y allows us to automatically use i to "roll over" into next row*/
-        Pixel p = get_avg_color(pixels, image->columns, i, 0, each_width, each_height);
-        for(size_t c=0; c < each_width*each_height;) {
-            pixels[j++] = p.r;
-            pixels[j++] = p.g;
-            pixels[j++] = p.b;
-            if(++c % each_width == 0)
-                j += (image->columns - each_width) * 3; //next row ...
-        }
-        i += each_width; //next splotch
-        /* If this row is done, skip over all the rows we just splotched */
-        if(i % image->columns == 0)
-            i += image->columns * (each_height - 1);
-        j = i * 3;
-    }
-    Image *new_image = ConstituteImage(image->columns, image->rows, "RGB", CharPixel, pixels, exception);
-    free(pixels);
-    if(!new_image)
-        MagickError(exception->severity, exception->reason, exception->description);
-    return new_image;
 }
 
 static bool get_resized_pixel_info(char *filename, const size_t width, const size_t height, unsigned char *pixels_out, ExceptionInfo *exception) {
@@ -377,7 +303,9 @@ static bool get_resized_pixel_info(char *filename, const size_t width, const siz
         image_info->filename[0] = 0;
         strncat(image_info->filename, filename, filename_len);
         Image *src_img = ReadImage(image_info, exception);
-        Image *src_img_r = resize_image_to(src_img, width, height, exception);
+        Image *src_img_r = ResizeImage(src_img, width, height, LanczosFilter, exception);
+
+        if(!src_img_r) MagickError(exception->severity, exception->reason, exception->description);
         ExportImagePixels(src_img_r, 0, 0, width, height, "RGB", CharPixel, pixels_out, exception);
         if(exception->severity != UndefinedException) CatchException(exception);
         DestroyImage(src_img);
@@ -471,22 +399,12 @@ static Image *photomosaic(Image *image, const size_t each_width, const size_t ea
 
 void usage(char *progname) {
     fprintf(stderr,
-        "Usage: %s (-h | (-i <input_file> ((-a|-n) "
-        "| ((-d|(-r <resize_factor> |-R)|-s|-m) -o <output_file>)) "
-        "[-w <width> -l <length>] [-x <x_pos> -y <y_pos>]))\n"
-        "\t-a\tPrint average color of the given section of the file.\n\t\t"
-        "The starting point is ('x_pos', 'y_pos') (0,0 by default).\n\t\t"
-        "The size of the section is 'width' x 'length' (1,1 by default).\n"
-        "\t-d\t'Dumb shrink' the image. Reduces each block of the file of size\n\t\t"
-        "'width' x 'length' to a single pixel of the average color of each.\n"
+        "Usage: %s (-h | (-i <input_file> -o <output_file> -w <width> -l <length>))\n"
         "\t-h\tPrint this help message and exit.\n"
-        "\t-m\tMake a photomosaic of the image by replacing each block\n\t\t"
-        "of 'input_file' of size 'width' x 'length' by the resized\n\t\t"
-        "version of some image with a similar average color.\n"
-        "\t-n\tPrint the RGB values of the pixel at the\n\t\t"
-        "position ('x_pos', 'y_pos') in 'input_file'.\n"
-        "\t-s\tCreate a splotchy version of 'input_file' by averaging out\n\t\t"
-        "the color of each block of the image of size 'width' x 'length'.\n"
+        "\tThis program creates a photomosaic by replacing each block\n\t"
+        "of 'input_file' of size 'width' x 'length' by the resized\n\t"
+        "version of some image with a similar average color.\n\t"
+        "Writes the new image to the filename specified by 'output_file'.\n"
         "\n\nExit status:\n"
         "\t0\tSpecified operation succeeded\n"
         "\t1\tError reading or performing some operation on an image\n"
@@ -502,25 +420,11 @@ int main(int argc, char **argv) {
     char output_img_filename[400];
     output_img_filename[0] = 0;
     ImageInfo *image_info, *new_image_info = NULL;
-    float resize_factor = 0.0;
-    bool prn_avg_color = false;
-    bool dumb_shrink = false;
-    bool prn_pixel_info = false;
-    bool resize = false;
-    bool splotch = false;
-    bool mosaic = false;
-    ssize_t x = 0, y = 0;
     size_t length = 1, width = 1;
 
     int opt;
-    while((opt=getopt(argc, argv, "adhi:l:mno:Rr:sw:x:y:")) > -1) {
+    while((opt=getopt(argc, argv, "h:i:o:l:w:")) > -1) {
         switch(opt) {
-        case 'a':
-            prn_avg_color = true;
-            break;
-        case 'd':
-            dumb_shrink = true;
-            break;
         case 'h':
             usage(argv[0]);
             return 0;
@@ -531,57 +435,19 @@ int main(int argc, char **argv) {
             if(!parse_ulong(optarg, &length))
                 DIE(2, "Argument \"%s\" to option -l could not be parsed to a long long int.", optarg);
             break;
-        case 'm':
-            mosaic = true;
-            break;
-        case 'n':
-            prn_pixel_info = true;
-            break;
         case 'o':
             strcpy(output_img_filename, optarg);
-            break;
-        case 'R':
-            resize=true;
-            break;
-        case 'r':
-            if(!parse_float(optarg, &resize_factor))
-                DIE(2, "Argument \"%s\" to option -r could not be parsed to a float.", optarg);
-            // TODO implement a more robust maximum
-            if(resize_factor < 0.01 || resize_factor > 10.0)
-                DIE(2, "resize_factor %.1f is out of bounds. Should be greater than 0 and no more than 10.", resize_factor);
-            resize = true;
-            break;
-        case 's':
-            splotch = true;
             break;
         case 'w':
             if(!parse_ulong(optarg, &width))
                 DIE(2, "Argument \"%s\" to option -w could not be parsed to a long long int.", optarg);
             break;
-        case 'x':
-            if(!parse_long(optarg, &x))
-                DIE(2, "Argument \"%s\" to option -x could not be parsed to a long int.", optarg);
-            break;
-        case 'y':
-            if(!parse_long(optarg, &y))
-                DIE(2, "Argument \"%s\" to option -x could not be parsed to a long int.", optarg);
-            break;
         }
     }
 
 
-    if(!(prn_avg_color ^ dumb_shrink ^ prn_pixel_info  ^ resize ^ splotch ^ mosaic)) {
-        DIE(2, "Must specify exactly one of: -a, -d, -h -n, (-r|-R), -s, -m"
-            "%s -h for usage.", argv[0]);
-    }
-    if(slen(input_img_filename, 400) < 1)
-        DIE(2, "No input image specified.%s", "");
-    if((resize || splotch) && slen(output_img_filename, 400) < 1)
-        DIE(2, "Must specify output image to resize or splotch.%s", "");
-    if(prn_pixel_info || prn_avg_color)
-        fprintf(stderr, "point: %zu, %zu\n", x, y);
-    if(prn_avg_color || dumb_shrink || splotch || mosaic || (resize && resize_factor < 0.01))
-        fprintf(stderr, "dimensions: %zu x %zu\n", width, length);
+    if(slen(input_img_filename, 400) < 1)  DIE(2, "No input image specified.%s", "");
+    if(slen(output_img_filename, 400) < 1) DIE(2, "No output image specified.%s", "");
 
     MagickCoreGenesis(*argv, MagickTrue);
     exception = AcquireExceptionInfo();
@@ -594,25 +460,11 @@ int main(int argc, char **argv) {
     if(!input_img)
         DIE(1, "Input image %s could not be read.", input_img_filename);
 
-    if(prn_avg_color)
-        print_avg_color(input_img, x, y, width, length, exception);
-    else if(dumb_shrink)
-        output_img = make_img_avg_colors(input_img, 0, 0, width, length, exception);
-    else if(prn_pixel_info)
-        print_pixel_info(input_img, x, y, exception);
-    else if(resize) {
-        if(resize_factor < 0.01)
-            output_img = resize_image_to(input_img, width, length, exception);
-        else
-            output_img = resize_image_by_factor(input_img, resize_factor, exception);
-    }
-    else if(splotch)
-        output_img = splotch_img(input_img, width, length, exception);
-    else if(mosaic)
-        output_img = photomosaic(input_img, width, length, exception);
+    output_img = photomosaic(input_img, width, length, exception);
 
     if(exception->severity != UndefinedException)
         CatchException(exception);
+
 
     /* Teardown */
     if(files_inner_cached) {
