@@ -13,8 +13,9 @@
 #include <unistd.h>
 #include <MagickCore/MagickCore.h>
 
-#define DIE(rc, fmt, ...)    { fprintf(stderr, "FATAL: "fmt"\n", __VA_ARGS__); return rc; }
-#define WARN(fmt, ...)       { fprintf(stderr, "WARN: " fmt"\n", __VA_ARGS__); }
+#define DIE(rc, fmt, ...)               { fprintf(stderr, "FATAL: "fmt"\n", __VA_ARGS__); return rc; }
+#define WARN(fmt, ...)                  { fprintf(stderr, "WARN: " fmt"\n", __VA_ARGS__); }
+#define assert_error(expression, s)     if(!expression) { perror(s); abort(); }
 
 typedef struct {
     unsigned int r, g, b;
@@ -37,6 +38,9 @@ static char **inner_cache_tmp_files;
 static char **files_inner_cached = NULL;
 static size_t files_inner_cached_ind = 0;
 
+static void try(int exit_code, char *function_name) {
+    if(exit_code != 0) perror(function_name);
+}
 static size_t slen(const char *s, size_t maxlen) {
     char *pos = memchr(s, '\0', maxlen);
     return pos ? (size_t)(pos - s) : maxlen;
@@ -121,8 +125,10 @@ static ssize_t cache_grep(char *key) {
             perror("fopen");
         }
         else {
-            if(stat(cache_filename, &cache_st) && errno == ENOENT) {
-                /* stat failed; create the file and try again just in case */
+            if(stat(cache_filename, &cache_st) == 0)
+                errno = 0;
+            else if(errno == ENOENT) {
+                /* create the file and try again just in case that's the only error */
                 errno = 0;
                 FILE *tmp_cache_file = fopen(cache_filename, "a");
                 if(!tmp_cache_file) {
@@ -131,14 +137,15 @@ static ssize_t cache_grep(char *key) {
                     perror("fopen");
                 }
                 else {
-                    assert(!fclose(tmp_cache_file));
-                    if(stat(cache_filename, &cache_st)) {
+                    try(fclose(tmp_cache_file), "fclose");
+                    if(stat(cache_filename, &cache_st) != 0) {
                         WARN("Could not stat cache file '%s'", cache_filename);
                         perror("stat");
                     }
                 }
             }
         }
+
         if(errno) {
             WARN("Will stop attempting to cache to '%s' for the remainder of execution.", cache_filename);
             cache_size = -1;
@@ -157,7 +164,7 @@ static ssize_t cache_grep(char *key) {
         cache_buf[cache_size] = 0; /* For the initial strncat later */
 
         assert(cache_size == cache_file_size);
-        assert(!fclose(cache_file));
+        try(fclose(cache_file), "fclose");
     }
 
     if(cache_size == 0) return -1;
@@ -189,7 +196,7 @@ static ssize_t cache_grep(char *key) {
         assert(fn_len);
         if(!strncmp(filename, key, fn_len)) {
             //Already exists in cache
-            assert(!stat(filename, &file_st));
+            try(stat(filename, &file_st), "stat");
             //The sole use of `initial_...`. Prevents the caller from re- and recaching newly-added files
             if(i > initial_cache_size - 1 || file_st.st_mtime < cache_mtime) {
                 /* Cache entry is up to date */
@@ -199,7 +206,7 @@ static ssize_t cache_grep(char *key) {
                then we will delete this line at the end of the program */
             if(deletables_ind > 49) {
                 deletables = realloc(deletables, (deletables_ind + 1) * sizeof(deletables[0]));
-                assert(deletables);
+                assert_error(deletables, "realloc");
             }
             deletables[deletables_ind++] = fn_begin;
             return -1;
@@ -223,7 +230,8 @@ static bool cache_put_pixel(char *key, Pixel value) {
     int entry_length = sprintf(entry, "%s\t%02x%02x%02x\n", key, value.r, value.g, value.b);
     size_t new_size_of_cache = cache_size + entry_length + 1;
     if(new_size_of_cache > cache_max_size) {
-        assert((cache_buf=realloc(cache_buf, new_size_of_cache)));
+        cache_buf = realloc(cache_buf, new_size_of_cache);
+        assert_error(cache_buf, "realloc");
         cache_max_size = new_size_of_cache;
     }
     strncat(cache_buf, entry, entry_length);
@@ -340,7 +348,7 @@ static bool get_resized_pixel_info(char *filename, const size_t width, const siz
 
     if(file_is_cached) {
         FILE *inner_cache = fopen(inner_cache_tmp_files[i], "rb");
-        assert(inner_cache);
+        assert_error(inner_cache, "fopen");
         size_t z = fread(pixels_out, 1, pixels_arr_size, inner_cache);
         fclose(inner_cache);
         return z == pixels_arr_size;
@@ -364,7 +372,7 @@ static bool get_resized_pixel_info(char *filename, const size_t width, const siz
         free(temp_name);
 
         FILE *inner_cache = fopen(temp_path, "wb");
-        assert(inner_cache);
+        assert_error(inner_cache, "fopen");
         ImageInfo *image_info = CloneImageInfo((ImageInfo *)NULL);
         image_info->filename[0] = 0;
         strncat(image_info->filename, filename, filename_len);
@@ -431,7 +439,7 @@ static Image *photomosaic(Image *image, const size_t each_width, const size_t ea
     FILE *f = popen("find $(find ~/pics -type d | grep -vE 'redacted|not_real') -maxdepth 1 -type f -print0", "r");
     char buf[IMG_LIST_MAX_SIZE];
     size_t bytes_read = fread(buf, 1, IMG_LIST_MAX_SIZE, f);
-    assert(!pclose(f));
+    try(pclose(f), "pclose");
 
     assert(ExportImagePixels(image, 0, 0, image->columns, image->rows, "RGB", CharPixel, pixels, exception));
 
@@ -609,11 +617,11 @@ int main(int argc, char **argv) {
     /* Teardown */
     if(files_inner_cached) {
         for(size_t i=0; i < files_inner_cached_ind; i++) {
-            if(remove(inner_cache_tmp_files[i])) perror("remove");
+            try(remove(inner_cache_tmp_files[i]), "remove");
             free(inner_cache_tmp_files[i]);
             free(files_inner_cached[i]);
         }
-        if(remove(temp_dirname)) perror("remove");
+        try(remove(temp_dirname), "remove");
     }
     if(cache_buf) {
         FILE *cache = fopen(cache_filename, "w");
