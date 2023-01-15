@@ -214,7 +214,7 @@ static ssize_t cache_grep(char *key) {
     }
     return -1;
 }
-static bool cache_fetch_pixel(char *key, Pixel *value) {
+static bool cache_fetch(char *key, Pixel *value) {
     ssize_t i = cache_grep(key);
     if(i == -1) return false;
     char hexstr[7];
@@ -224,7 +224,7 @@ static bool cache_fetch_pixel(char *key, Pixel *value) {
     *value = hexstr_top(hexstr);
     return true;
 }
-static bool cache_put_pixel(char *key, Pixel value) {
+static bool cache_put(char *key, Pixel value) {
     if(!cache_buf) return false;
     char entry[MAX_FN_LEN + 9];
     int entry_length = sprintf(entry, "%s\t%02x%02x%02x\n", key, value.r, value.g, value.b);
@@ -404,11 +404,11 @@ static unsigned char *get_img_with_closest_avg(char *img_list, size_t img_list_s
 
     for(size_t c=0; c < img_list_size;) {
         Pixel avg;
-        bool fetched_avg_from_cache = cache_fetch_pixel(&img_list[c], &avg);
+        bool fetched_avg_from_cache = cache_fetch(&img_list[c], &avg);
         if(!fetched_avg_from_cache) {
             assert(get_resized_pixel_info(&img_list[c], width, height, pixels, exception));
             avg = get_avg_color(pixels, width, 0, 0, width, height);
-            assert(cache_put_pixel(&img_list[c], avg));
+            assert(cache_put(&img_list[c], avg));
         }
         long rdiff = (long)avg.r - p.r;
         long gdiff = (long)avg.g - p.g;
