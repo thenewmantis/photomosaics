@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <MagickCore/MagickCore.h>
 
-#define DIE(rc, fmt, ...)               { fprintf(stderr, "FATAL: "fmt"\n", __VA_ARGS__); return rc; }
+#define DIE(rc, fmt, ...)               { fprintf(stderr, "FATAL: "fmt"\n", __VA_ARGS__); exit(rc); }
 #define WARN(fmt, ...)                  { fprintf(stderr, "WARN: " fmt"\n", __VA_ARGS__); }
 #define assert_error(expression, s)     if(!expression) { perror(s); abort(); }
 
