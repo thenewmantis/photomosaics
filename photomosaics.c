@@ -415,9 +415,10 @@ void usage(char *progname) {
 int main(int argc, char **argv) {
     ExceptionInfo *exception;
     Image *input_img, *output_img = NULL;
-    char input_img_filename[400];
+    const size_t max_fn_len = 400;
+    char input_img_filename[max_fn_len];
     input_img_filename[0] = 0;
-    char output_img_filename[400];
+    char output_img_filename[max_fn_len];
     output_img_filename[0] = 0;
     ImageInfo *image_info, *new_image_info = NULL;
     size_t length = 1, width = 1;
@@ -429,25 +430,26 @@ int main(int argc, char **argv) {
             usage(argv[0]);
             return 0;
         case 'i':
-            strcpy(input_img_filename, optarg);
+            if(slen(optarg, max_fn_len) == max_fn_len) DIE(2, "Argument \"%s\" to option -i should be less than %zu characters.", optarg, max_fn_len)
+            strncat(input_img_filename, optarg, max_fn_len - 1);
             break;
         case 'l':
             if(!parse_ulong(optarg, &length))
-                DIE(2, "Argument \"%s\" to option -l could not be parsed to a long long int.", optarg);
+                DIE(2, "Argument \"%s\" to option -l could not be parsed to an unsigned long int.", optarg);
             break;
         case 'o':
-            strcpy(output_img_filename, optarg);
+            if(slen(optarg, max_fn_len) == max_fn_len) DIE(2, "Argument \"%s\" to option -o should be less than %zu characters.", optarg, max_fn_len)
+            strncat(output_img_filename, optarg, max_fn_len - 1);
             break;
         case 'w':
             if(!parse_ulong(optarg, &width))
-                DIE(2, "Argument \"%s\" to option -w could not be parsed to a long long int.", optarg);
+                DIE(2, "Argument \"%s\" to option -w could not be parsed to an unsigned long int.", optarg);
             break;
         }
     }
 
-
-    if(slen(input_img_filename, 400) < 1)  DIE(2, "No input image specified.%s", "");
-    if(slen(output_img_filename, 400) < 1) DIE(2, "No output image specified.%s", "");
+    if(slen(input_img_filename, max_fn_len) < 1)  DIE(2, "No input image specified.%s", "");
+    if(slen(output_img_filename, max_fn_len) < 1) DIE(2, "No output image specified.%s", "");
 
     MagickCoreGenesis(*argv, MagickTrue);
     exception = AcquireExceptionInfo();
