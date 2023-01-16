@@ -424,7 +424,7 @@ int main(int argc, char **argv) {
     size_t length = 1, width = 1;
 
     int opt;
-    while((opt=getopt(argc, argv, "h:i:o:l:w:")) > -1) {
+    while((opt=getopt(argc, argv, "hi:o:l:w:")) > -1) {
         switch(opt) {
         case 'h':
             usage(argv[0]);
